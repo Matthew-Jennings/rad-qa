@@ -42,9 +42,9 @@ def box_plot_sectors(
     delta = (box_width / 2) + spacing
 
     # Loop through sectors and add box and scatter traces
-    for sector in sector_positions.keys():
+    for sector, position in sector_positions.items():
         # Central position for the sector label
-        x_label = sector_positions[sector]
+        x_label = position
 
         # Positions for the box and scatter plots
         box_x = [x_label + delta] * len(df)
@@ -134,7 +134,7 @@ def box_plot_sectors_express(df: pd.DataFrame) -> None:
     fig.show()
 
 
-def norm_df_by_col(df: pd.DataFrame, col_label: str, drop_col=False) -> pd.DataFrame:
+def _norm_df_by_col(df: pd.DataFrame, col_label: str, drop_col=False) -> pd.DataFrame:
     cols_to_divide = [
         sector for sector in SECTOR_COLOR_MAP.keys() if col_label != sector
     ]
@@ -145,7 +145,7 @@ def norm_df_by_col(df: pd.DataFrame, col_label: str, drop_col=False) -> pd.DataF
     return df_normed_by_col
 
 
-def make_relative_to_col(df, col_label="A"):
+def _make_relative_to_col(df, col_label="A"):
     cols_to_adjust = [
         sector
         for sector in SECTOR_COLOR_MAP.keys()  # if col_label != sector
@@ -162,7 +162,7 @@ if __name__ == "__main__":
     data_path = HERE / "pac-man-karolinska-results.csv"
 
     df = pd.read_csv(data_path)
-    df_normed = norm_df_by_col(df, "Ropen", drop_col=False)
+    df_normed = _norm_df_by_col(df, "Ropen", drop_col=False)
     df_normed["Source"] = data_source
 
     box_plot_sectors(
@@ -172,7 +172,7 @@ if __name__ == "__main__":
     )
 
     sector_norm = "A"
-    df_normed_rel_to_col = make_relative_to_col(df_normed, col_label=sector_norm)
+    df_normed_rel_to_col = _make_relative_to_col(df_normed, col_label=sector_norm)
 
     sectors_to_plot = [
         sector for sector in SECTOR_COLOR_MAP.keys() if sector != sector_norm
