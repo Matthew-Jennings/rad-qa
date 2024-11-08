@@ -1,0 +1,12 @@
+{
+    "roi_center_offset_from_image_centre_mm": 56,
+    "roi_width_mm": 40,
+    "roi_height_mm": 10,
+    "roi_angles": [150, 210, 270, 330, 30],
+    "roi_colors": ["blue", "red", "yellow", "purple", "green"],
+    "roi_labels": ["A", "B", "C", "D", "E"],
+    "normalization_identifiers": {
+        "drcs_field": "rad",
+        "norm_field": "open"
+    }
+}

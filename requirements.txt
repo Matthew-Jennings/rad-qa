@@ -1,0 +1,7 @@
+matplotlib
+numpy
+openpyxl
+pandas
+plotly
+pydicom
+scikit-image
