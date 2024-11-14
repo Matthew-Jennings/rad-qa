@@ -306,24 +306,26 @@ def test_columns_order(roi_config):
 
 
 def test_open_file(monkeypatch):
-    """Test the open_file function across different operating systems."""
+    """Test the open_file function, mocking OS-specific calls."""
     filepath = pathlib.Path("test_file.csv")
 
-    # Mock platform.system()
-    for os_name in ["Windows", "Darwin", "Linux"]:
+    # Mock platform.system() to return each OS name
+    os_systems = ["Windows", "Darwin", "Linux"]
+    for os_name in os_systems:
         monkeypatch.setattr(platform, "system", lambda: os_name)
         if os_name == "Windows":
+            # Mock os.startfile if it exists
             with mock.patch("os.startfile") as mock_startfile:
                 analyse_drcs.open_file(filepath)
                 mock_startfile.assert_called_once_with(filepath)
-        elif os_name == "Darwin":
+        else:
+            # Mock subprocess.run
             with mock.patch("subprocess.run") as mock_run:
                 analyse_drcs.open_file(filepath)
-                mock_run.assert_called_once_with(["open", filepath])
-        else:  # Linux and other Unix systems
-            with mock.patch("subprocess.run") as mock_run:
-                analyse_drcs.open_file(filepath)
-                mock_run.assert_called_once_with(["xdg-open", filepath])
+                if os_name == "Darwin":
+                    mock_run.assert_called_once_with(["open", filepath])
+                else:  # Linux and other Unix systems
+                    mock_run.assert_called_once_with(["xdg-open", filepath])
 
 
 def test_no_dicom_files(tmp_path, roi_config, caplog):
