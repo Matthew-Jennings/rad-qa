@@ -305,27 +305,36 @@ def test_columns_order(roi_config):
             ), f"Expected column '{col}' at position {idx}, got '{df.columns[idx]}'"
 
 
-def test_open_file(monkeypatch):
-    """Test the open_file function, mocking OS-specific calls."""
+@pytest.mark.skipif(
+    not hasattr(os, "startfile"), reason="os.startfile is only available on Windows"
+)
+def test_open_file_windows(monkeypatch):
+    """Test the open_file function on Windows."""
     filepath = pathlib.Path("test_file.csv")
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+    with mock.patch("os.startfile") as mock_startfile:
+        analyse_drcs.open_file(filepath)
+        mock_startfile.assert_called_once_with(filepath)
 
-    # Mock platform.system() to return each OS name
-    os_systems = ["Windows", "Darwin", "Linux"]
-    for os_name in os_systems:
-        monkeypatch.setattr(platform, "system", lambda: os_name)
-        if os_name == "Windows":
-            # Mock os.startfile if it exists
-            with mock.patch("os.startfile") as mock_startfile:
-                analyse_drcs.open_file(filepath)
-                mock_startfile.assert_called_once_with(filepath)
-        else:
-            # Mock subprocess.run
-            with mock.patch("subprocess.run") as mock_run:
-                analyse_drcs.open_file(filepath)
-                if os_name == "Darwin":
-                    mock_run.assert_called_once_with(["open", filepath])
-                else:  # Linux and other Unix systems
-                    mock_run.assert_called_once_with(["xdg-open", filepath])
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="Test only runs on macOS")
+def test_open_file_macos(monkeypatch):
+    """Test the open_file function on macOS."""
+    filepath = pathlib.Path("test_file.csv")
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    with mock.patch("subprocess.run") as mock_run:
+        analyse_drcs.open_file(filepath)
+        mock_run.assert_called_once_with(["open", filepath])
+
+
+@pytest.mark.skipif(platform.system() != "Linux", reason="Test only runs on Linux")
+def test_open_file_linux(monkeypatch):
+    """Test the open_file function on Linux."""
+    filepath = pathlib.Path("test_file.csv")
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    with mock.patch("subprocess.run") as mock_run:
+        analyse_drcs.open_file(filepath)
+        mock_run.assert_called_once_with(["xdg-open", filepath])
 
 
 def test_no_dicom_files(tmp_path, roi_config, caplog):
