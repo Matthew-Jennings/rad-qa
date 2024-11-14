@@ -1,6 +1,6 @@
 # Analyse DR-CS
 
-Analyse DR-CS is a Python script designed to process and analyze Dose Rate - Collimator Speed (DR-CS) quality control tests for Varian TrueBeam radiotherapy systems. The script automates the extraction of statistics from DICOM images, facilitating efficient quality assurance in radiotherapy departments.
+Analyse DR-CS is a Python script designed to process and analyze DICOM RTImages for the Dose Rate - Collimator Speed (DR-CS) quality control test for Varian TrueBeam radiotherapy systems. Predicted and acquired images are supported.
 
 ## Table of Contents
 
