@@ -22,7 +22,6 @@ Analyse DR-CS is a Python script designed to process and analyze Dose Rate - Col
 - **Normalization**: Optionally normalizes DR-CS ROI statistics by corresponding open field images based on `AcquisitionDate`.
 - **Visualization**: Supports live display or saving of images with ROIs overlaid for visual inspection.
 - **Flexible Configuration**: Uses a JSON configuration file to define ROI parameters and matching criteria.
-- **Data Integrity**: Ensures that all DICOM files are de-identified to protect patient privacy.
 
 ## Installation
 
@@ -34,7 +33,7 @@ Analyse DR-CS is a Python script designed to process and analyze Dose Rate - Col
 ### Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/analyse-drcs.git
+git clone https://github.com/Matthew-Jennings/rad-qa
 cd analyse-drcs
 ```
 
@@ -52,12 +51,12 @@ pip install -r requirements.txt
 python analyse_drcs.py input_directory [options]
 ```
 
-`input_directory`: Path to the directory containing DICOM files and config.json
+`input_directory`: Path to the directory containing DICOM files and `config.json`
 
 #### Optional Arguments:
 
 - `--inspect-live`: Display images with ROIs overlaid during processing.
-- `--inspect-save`: Save images with ROIs overlaid to the output_images directory.
+- `--inspect-save`: Save images with ROIs overlaid to the `output_images` directory.
 - `--normalize`: Normalize DR-CS ROI stats by the normalization field stats.
 - `--open-csv`: Automatically open the output CSV file after processing.
 - `--open-excel`: Automatically open the output Excel file after processing.
@@ -128,10 +127,10 @@ The script requires a `config.json` file in the input directory to define ROI co
 
 #### Image Matching:
 
-- `open_rtimage_labels`: List of RTImageLabels identifying open field images.
-- `drcs_rtimage_labels`: List of RTImageLabels identifying DR-CS images.
+- `open_rtimage_labels`: List of `RTImageLabel`s identifying open field images.
+- `drcs_rtimage_labels`: List of `RTImageLabel`s identifying DR-CS images.
 
-**Note:** Ensure that roi_angles and roi_colors lists have the same length and correspond to each ROI.
+**Note:** Ensure that `roi_angles` and `roi_colors` lists have the same length and ROI correspondence.
 
 
 ## Output Files

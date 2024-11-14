@@ -1,3 +1,17 @@
+# Copyright (C) 2024 Matthew Jennings
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Module for analyzing the Dose Rate - Collimator Speed (DR-CS) quality control test for
 Varian TrueBeam radiotherapy systems.
@@ -13,7 +27,8 @@ automating the analysis of DR-CS tests.
 
 Usage:
 
-    python analyse_drcs.py input_directory [--inspect-live] [--inspect-save] [--normalize] [--open-csv] [--open-excel]
+    python analyse_drcs.py input_directory [--inspect-live] [--inspect-save]
+        [--normalize] [--open-csv] [--open-excel]
 
 Arguments:
 
@@ -33,11 +48,6 @@ Optional arguments:
         Automatically open the output CSV file after processing.
     --open-excel:
         Automatically open the output Excel file after processing.
-
-Warning:
-    Ensure that all DICOM files are de-identified and do not contain any Protected Health Information (PHI).
-
-Copyright (c) 2023
 """
 
 import argparse
@@ -66,7 +76,8 @@ NUM_ROIS = len(ROI_LABELS)
 
 def get_rotated_rectangle_vertices(cx, cy, width, height, angle_deg):
     """
-    Compute the vertices of a rotated rectangle given its center, dimensions, and rotation angle.
+    Compute the vertices of a rotated rectangle given its center, dimensions, and
+    rotation angle.
 
     Args:
         cx (float): X-coordinate of the rectangle center in pixels.
@@ -91,7 +102,7 @@ def get_rotated_rectangle_vertices(cx, cy, width, height, angle_deg):
     corners = np.array([[-w, -h], [w, -h], [w, h], [-w, h]])
 
     # Rotation matrix
-    R = np.array(
+    R = np.array(  # pylint: disable=invalid-name
         [
             [np.cos(angle_rad), -np.sin(angle_rad)],
             [np.sin(angle_rad), np.cos(angle_rad)],
@@ -122,8 +133,8 @@ def load_roi_config(config_path):
             "roi_center_offset_from_image_centre_mm": <float>,
             "roi_width_mm": <float>,
             "roi_height_mm": <float>,
-            "roi_angles": [<float>, <float>, ..., <float>],     # List of length NUM_ROIS
-            "roi_colors": [<str>, <str>, ..., <str>],           # List of length NUM_ROIS
+            "roi_angles": [<float>, <float>, ..., <float>],    # List of length NUM_ROIS
+            "roi_colors": [<str>, <str>, ..., <str>],          # List of length NUM_ROIS
             "open_rtimage_labels": [<str>, <str>, ...],
             "drcs_rtimage_labels": [<str>, <str>, ...]
         }
@@ -142,7 +153,7 @@ def load_roi_config(config_path):
         raise FileNotFoundError(f"Configuration file not found at {config_path}")
 
     try:
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
     except json.JSONDecodeError as exc:
         raise ValueError(
@@ -221,8 +232,8 @@ def get_roi_stats(ds, roi_config, inspect_mode=None, output_dir=None, image_name
         - Apply scaling factors (`RescaleSlope` and `RescaleIntercept`) to convert raw
           pixel data to physical units.
         - Convert dose units from Gy to cGy.
-        - If the image is an acquired dose, normalize by the `MetersetExposure` to obtain
-          cGy/MU.
+        - If the image is an acquired dose, normalize by the `MetersetExposure` to
+          obtain cGy/MU.
 
     2. ROI Processing:
         - For each ROI in the configuration:
@@ -244,7 +255,8 @@ def get_roi_stats(ds, roi_config, inspect_mode=None, output_dir=None, image_name
         inspect_mode (str, optional): If 'live', displays the image with ROIs overlaid.
             If 'save', saves the image with ROIs overlaid to a file.
             Defaults to None.
-        output_dir (pathlib.Path, optional): Directory to save images if inspect_mode is 'save'.
+        output_dir (pathlib.Path, optional): Directory to save images if inspect_mode
+            is 'save'.
         image_name (str, optional): Name to use for the saved image file.
 
     Returns:
@@ -269,7 +281,8 @@ def get_roi_stats(ds, roi_config, inspect_mode=None, output_dir=None, image_name
     image_type = getattr(ds, "ImageType", None)
     if image_type is None or len(image_type) < 4:
         raise AttributeError(
-            "DICOM file missing 'ImageType' attribute or it is not in the expected format."
+            "DICOM file missing 'ImageType' attribute or it is not in the expected "
+            "format."
         )
 
     if image_type[3] == "ACQUIRED_DOSE":
@@ -415,7 +428,8 @@ def get_roi_stats_for_images_in_dir(
             - Determine image type based on 'RTImageLabel'.
             - Adjust ROI angles for rotated images if necessary.
             - Calculate ROI statistics using `get_roi_stats`.
-            - Store the results along with the file name, RTImageLabel, and AcquisitionDate.
+            - Store the results along with the file name, RTImageLabel, and
+              AcquisitionDate.
 
     2. DataFrame Creation:
         - Compile the collected statistics into a pandas DataFrame.
@@ -424,16 +438,20 @@ def get_roi_stats_for_images_in_dir(
         - If normalization is requested:
             - Use 'AcquisitionDate' to group images.
             - Match DR-CS images to open images within the same AcquisitionDate.
-            - Perform normalization by dividing DR-CS ROI stats by the open field ROI stats.
+            - Perform normalization by dividing DR-CS ROI stats by the open field ROI
+              stats.
 
     4. Additional Statistics:
-        - Calculate additional statistics such as `Average` and `Max vs Min` for each image.
+        - Calculate additional statistics such as `Average` and `Max vs Min` for each
+          image.
 
     Args:
         dirpath (pathlib.Path): Path to the directory containing DICOM files.
-        roi_config (dict): Dictionary containing ROI configuration parameters and RTImageLabels.
-        inspect_mode (str, optional): If 'live', displays images with ROIs overlaid during
-            processing. If 'save', saves images with ROIs overlaid to files. Defaults to None.
+        roi_config (dict): Dictionary containing ROI configuration parameters and
+            RTImageLabels.
+        inspect_mode (str, optional): If 'live', displays images with ROIs overlaid
+            during processing. If 'save', saves images with ROIs overlaid to files.
+            Defaults to None.
         normalize (bool, optional): If `True`, normalizes DR-CS ROI stats by the
             normalization field stats. Defaults to `False`.
 
@@ -551,7 +569,7 @@ def get_roi_stats_for_images_in_dir(
 
             drcs_images = group[group["ImageType"] == "DRCS"]
 
-            for idx, drcs_image in drcs_images.iterrows():
+            for _, drcs_image in drcs_images.iterrows():
                 # Exclude non-ROI columns
                 non_roi_columns = ["File", "RTImageLabel", "ImageType", group_key]
                 roi_columns = [
@@ -620,9 +638,9 @@ def open_file(filepath):
     if platform.system() == "Windows":
         os.startfile(filepath)
     elif platform.system() == "Darwin":  # macOS
-        subprocess.run(["open", filepath])
+        subprocess.run(["open", filepath], check=True)
     else:  # Linux and other Unix systems
-        subprocess.run(["xdg-open", filepath])
+        subprocess.run(["xdg-open", filepath], check=True)
 
 
 def main():
@@ -646,7 +664,8 @@ def main():
 
     - `input_directory` (str): Path to the input directory containing DICOM files and
       `config.json`.
-    - `--inspect-live`: If specified, displays images with ROIs overlaid during processing.
+    - `--inspect-live`: If specified, displays images with ROIs overlaid during
+      processing.
     - `--inspect-save`: If specified, saves images with ROIs overlaid to files.
     - `--normalize`: If specified, normalizes DR-CS ROI stats by the normalization
       field stats.
