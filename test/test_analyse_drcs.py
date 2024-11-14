@@ -332,24 +332,22 @@ def test_open_file_windows(monkeypatch):
         mock_startfile.assert_called_once_with(filepath)
 
 
-@pytest.mark.skipif(platform.system() != "Darwin", reason="Test only runs on macOS")
 def test_open_file_macos(monkeypatch):
     """Test the open_file function on macOS."""
     filepath = pathlib.Path("test_file.csv")
     monkeypatch.setattr(platform, "system", lambda: "Darwin")
     with mock.patch("subprocess.run") as mock_run:
         analyse_drcs.open_file(filepath)
-        mock_run.assert_called_once_with(["open", filepath])
+        mock_run.assert_called_once_with(["open", filepath], check=True)
 
 
-@pytest.mark.skipif(platform.system() != "Linux", reason="Test only runs on Linux")
 def test_open_file_linux(monkeypatch):
     """Test the open_file function on Linux."""
     filepath = pathlib.Path("test_file.csv")
     monkeypatch.setattr(platform, "system", lambda: "Linux")
     with mock.patch("subprocess.run") as mock_run:
         analyse_drcs.open_file(filepath)
-        mock_run.assert_called_once_with(["xdg-open", filepath])
+        mock_run.assert_called_once_with(["xdg-open", filepath], check=True)
 
 
 def test_no_dicom_files(tmp_path, roi_config, caplog):
