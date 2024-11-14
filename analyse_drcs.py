@@ -1,6 +1,6 @@
 """
-Module for analyzing the Dose Rate - Collimator Speed (DR-CS) test for Varian TrueBeam
-radiotherapy systems.
+Module for analyzing the Dose Rate - Collimator Speed (DR-CS) quality control test for
+Varian TrueBeam radiotherapy systems.
 
 This script processes DICOM images (predicted or acquired on a TrueBeam EPID) to
 calculate statistics for five Regions of Interest (ROIs) defined in a configuration
@@ -11,24 +11,33 @@ Optionally, it can normalize the DR-CS ROI statistics by normalization field sta
 when analyzing image pairs. The script is designed to facilitate quality assurance by
 automating the analysis of DR-CS tests.
 
-**Usage:**
+Usage:
 
-```bash
-python analyse_drcs.py input_directory [--inspect] [--normalize] [--open-output]
+    python analyse_drcs.py input_directory [--inspect-live] [--inspect-save] [--normalize] [--open-csv] [--open-excel]
 
-**Arguments:**
+Arguments:
 
-- input_directory: Path to the input directory containing DICOM files and a config.json
-file with ROI configurations.
+    input_directory:
+        Path to the input directory containing DICOM files and a config.json
+        file with ROI configurations.
 
-**Optional arguments:**
+Optional arguments:
 
-- --inspect: Display images with ROIs overlaid for visual inspection.
-- --normalize: Normalize DR-CS ROI stats by the normalization field stats.
-- --open-output: Automatically open the output Excel file after processing.
+    --inspect-live:
+        Display images with ROIs overlaid during processing.
+    --inspect-save:
+        Save images with ROIs overlaid to files.
+    --normalize:
+        Normalize DR-CS ROI stats by the normalization field stats.
+    --open-csv:
+        Automatically open the output CSV file after processing.
+    --open-excel:
+        Automatically open the output Excel file after processing.
 
+Warning:
+    Ensure that all DICOM files are de-identified and do not contain any Protected Health Information (PHI).
 
-Copyright (c) 2024, Matthew Jennings, Icon Group.
+Copyright (c) 2023
 """
 
 import argparse
@@ -36,6 +45,10 @@ import copy
 import os
 import pathlib
 import json
+import sys
+import platform
+import subprocess
+import logging
 
 import pandas as pd
 import pydicom
@@ -43,7 +56,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from skimage.draw import polygon
 
-NUM_ROIS = 5
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Hardcoded ROI labels
+ROI_LABELS = ["A", "B", "C", "D", "E"]
+NUM_ROIS = len(ROI_LABELS)
 
 
 def get_rotated_rectangle_vertices(cx, cy, width, height, angle_deg):
@@ -75,13 +93,13 @@ def get_rotated_rectangle_vertices(cx, cy, width, height, angle_deg):
     # Rotation matrix
     R = np.array(
         [
-            [np.cos(angle_rad), np.sin(angle_rad)],
-            [-np.sin(angle_rad), np.cos(angle_rad)],
+            [np.cos(angle_rad), -np.sin(angle_rad)],
+            [np.sin(angle_rad), np.cos(angle_rad)],
         ]
     )
 
     # Rotate corners
-    rotated_corners = corners @ R.T
+    rotated_corners = corners @ R
 
     # Translate to center position
     vertices = rotated_corners + np.array([cx, cy])
@@ -94,89 +112,100 @@ def load_roi_config(config_path):
     Load ROI configuration parameters from a JSON file.
 
     The configuration file should contain shared parameters and lists of angles,
-    colors, and labels for each of the five ROIs. The shared parameters include the
+    and colors for each of the five ROIs. The shared parameters include the
     center offset, width, and height of the ROIs. The lists provide specific attributes
     for each ROI.
 
-    **Expected JSON structure:**
+    Expected JSON structure::
 
-    ```json
-    {
-        "roi_center_offset_from_image_centre_mm": <float>,
-        "roi_width_mm": <float>,
-        "roi_height_mm": <float>,
-        "roi_angles": [<float>, <float>, ..., <float>],     // List of length NUM_ROIS
-        "roi_colors": [<str>, <str>, ..., <str>],           // List of length NUM_ROIS
-        "roi_labels": [<str>, <str>, ..., <str>]            // List of length NUM_ROIS
-    }
-    ```
+        {
+            "roi_center_offset_from_image_centre_mm": <float>,
+            "roi_width_mm": <float>,
+            "roi_height_mm": <float>,
+            "roi_angles": [<float>, <float>, ..., <float>],     # List of length NUM_ROIS
+            "roi_colors": [<str>, <str>, ..., <str>],           # List of length NUM_ROIS
+            "open_rtimage_labels": [<str>, <str>, ...],
+            "drcs_rtimage_labels": [<str>, <str>, ...]
+        }
 
     Args:
         config_path (pathlib.Path): Path to the configuration JSON file.
 
     Returns:
-        list: A list of dictionaries, each containing the parameters for one ROI.
+        dict: A dictionary containing ROI configurations and normalization identifiers.
 
     Raises:
         FileNotFoundError: If the configuration file does not exist.
         ValueError: If the configuration file is invalid or missing required keys.
     """
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Configuration file not found at {config_path}")
+
     try:
         with open(config_path, "r") as f:
             config = json.load(f)
-
-        # Validate configuration
-        required_shared_keys = {
-            "roi_center_offset_from_image_centre_mm",
-            "roi_width_mm",
-            "roi_height_mm",
-        }
-        required_list_keys = {"roi_angles", "roi_colors", "roi_labels"}
-
-        # Check for required keys
-        missing_shared_keys = required_shared_keys - set(config.keys())
-        missing_list_keys = required_list_keys - set(config.keys())
-
-        if missing_shared_keys:
-            raise ValueError(f"Missing required shared keys: {missing_shared_keys}")
-        if missing_list_keys:
-            raise ValueError(f"Missing required list keys: {missing_list_keys}")
-
-        # Check all lists have length 5
-        list_lengths = {key: len(config[key]) for key in required_list_keys}
-        if not all(length == NUM_ROIS for length in list_lengths.values()):
-            raise ValueError(
-                f"All lists must have length {NUM_ROIS}. Current lengths: {list_lengths}"
-            )
-
-        # Convert configuration format to list of dictionaries
-        roi_config = []
-        for i in range(NUM_ROIS):
-            roi_dict = {
-                "roi_center_offset_from_image_centre_mm": config[
-                    "roi_center_offset_from_image_centre_mm"
-                ],
-                "roi_width_mm": config["roi_width_mm"],
-                "roi_height_mm": config["roi_height_mm"],
-                "roi_angle": config["roi_angles"][i],
-                "roi_color": config["roi_colors"][i],
-                "roi_label": config["roi_labels"][i],
-            }
-            roi_config.append(roi_dict)
-
-        return roi_config
-
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            f"Configuration file not found at {config_path}"
-        ) from exc
     except json.JSONDecodeError as exc:
         raise ValueError(
             f"Invalid JSON format in configuration file {config_path}"
         ) from exc
 
+    # Validate configuration
+    required_shared_keys = {
+        "roi_center_offset_from_image_centre_mm",
+        "roi_width_mm",
+        "roi_height_mm",
+    }
+    required_list_keys = {"roi_angles", "roi_colors"}
 
-def get_roi_stats(ds, roi_config, inspect=False):
+    # Check for required keys
+    missing_shared_keys = required_shared_keys - set(config.keys())
+    missing_list_keys = required_list_keys - set(config.keys())
+
+    if missing_shared_keys:
+        raise ValueError(f"Missing required shared keys: {missing_shared_keys}")
+    if missing_list_keys:
+        raise ValueError(f"Missing required list keys: {missing_list_keys}")
+
+    # Check all lists have length NUM_ROIS
+    list_lengths = {key: len(config[key]) for key in required_list_keys}
+    if not all(length == NUM_ROIS for length in list_lengths.values()):
+        raise ValueError(
+            f"All lists must have length {NUM_ROIS}. Current lengths: {list_lengths}"
+        )
+
+    # Convert configuration format to list of dictionaries
+    roi_config_list = []
+    for i in range(NUM_ROIS):
+        roi_dict = {
+            "roi_center_offset_from_image_centre_mm": config[
+                "roi_center_offset_from_image_centre_mm"
+            ],
+            "roi_width_mm": config["roi_width_mm"],
+            "roi_height_mm": config["roi_height_mm"],
+            "roi_angle": config["roi_angles"][i],
+            "roi_color": config["roi_colors"][i],
+            "roi_label": ROI_LABELS[i],
+        }
+        roi_config_list.append(roi_dict)
+
+    # Get normalization identifiers
+    open_rtimage_labels = config.get("open_rtimage_labels", [])
+    drcs_rtimage_labels = config.get("drcs_rtimage_labels", [])
+
+    # Ensure that the labels are in lowercase for case-insensitive comparison
+    open_rtimage_labels = [label.lower() for label in open_rtimage_labels]
+    drcs_rtimage_labels = [label.lower() for label in drcs_rtimage_labels]
+
+    roi_config = {
+        "roi_list": roi_config_list,
+        "open_rtimage_labels": open_rtimage_labels,
+        "drcs_rtimage_labels": drcs_rtimage_labels,
+    }
+
+    return roi_config
+
+
+def get_roi_stats(ds, roi_config, inspect_mode=None, output_dir=None, image_name=None):
     """
     Calculate statistics for Regions of Interest (ROIs) in a DICOM image.
 
@@ -185,34 +214,38 @@ def get_roi_stats(ds, roi_config, inspect=False):
     (cGy/MU). The ROIs are defined based on a configuration that specifies their
     positions relative to the image center, dimensions, and rotation angles.
 
-    **Key steps:**
+    Key steps:
 
-    1. **Image Extraction and Scaling:**
-    - Extract the image data from the DICOM dataset.
-    - Apply scaling factors (`RescaleSlope` and `RescaleIntercept`) to convert raw
-      pixel data to physical units.
-    - Convert dose units from Gy to cGy.
-    - If the image is an acquired dose, normalize by the `MetersetExposure` to obtain
-      cGy/MU.
+    1. Image Extraction and Scaling:
+        - Extract the image data from the DICOM dataset.
+        - Apply scaling factors (`RescaleSlope` and `RescaleIntercept`) to convert raw
+          pixel data to physical units.
+        - Convert dose units from Gy to cGy.
+        - If the image is an acquired dose, normalize by the `MetersetExposure` to obtain
+          cGy/MU.
 
-    2. **ROI Processing:**
-    - For each ROI in the configuration:
-        - Calculate the center position in image coordinates, accounting for pixel
-          spacing and rotation.
-        - Determine the vertices of the rotated rectangle representing the ROI.
-        - Create a mask for the ROI and extract the pixel values within it.
-        - Compute the mean pixel value for the ROI.
+    2. ROI Processing:
+        - For each ROI in the configuration:
+            - Calculate the center position in image coordinates, accounting for pixel
+              spacing and rotation.
+            - Determine the vertices of the rotated rectangle representing the ROI.
+            - Create a mask for the ROI and extract the pixel values within it.
+            - Compute the mean pixel value for the ROI.
 
-    3. **Visualization (Optional):**
-    - If `inspect` is `True`, display the image with ROIs overlaid for visual
-      inspection.
+    3. Visualization (Optional):
+        - If `inspect_mode` is 'live', display the image with ROIs overlaid for visual
+          inspection.
+        - If `inspect_mode` is 'save', save the image with ROIs overlaid to a file.
 
     Args:
         ds (pydicom.dataset.FileDataset): DICOM dataset containing the image and
             metadata.
-        roi_config (list): List of dictionaries containing ROI configuration parameters.
-        inspect (bool, optional): If `True`, displays the image with ROIs overlaid for
-            visual inspection. Defaults to `False`.
+        roi_config (dict): Dictionary containing ROI configuration parameters.
+        inspect_mode (str, optional): If 'live', displays the image with ROIs overlaid.
+            If 'save', saves the image with ROIs overlaid to a file.
+            Defaults to None.
+        output_dir (pathlib.Path, optional): Directory to save images if inspect_mode is 'save'.
+        image_name (str, optional): Name to use for the saved image file.
 
     Returns:
         dict: A dictionary where keys are ROI labels and values are the mean pixel
@@ -222,27 +255,68 @@ def get_roi_stats(ds, roi_config, inspect=False):
         AttributeError: If necessary DICOM attributes are missing.
     """
     # Extract image data
-    image = ds.pixel_array * ds.RescaleSlope + ds.RescaleIntercept
+    rescale_slope = getattr(ds, "RescaleSlope", None)
+    rescale_intercept = getattr(ds, "RescaleIntercept", None)
+
+    if rescale_slope is None or rescale_intercept is None:
+        raise AttributeError(
+            "DICOM file missing 'RescaleSlope' or 'RescaleIntercept' attributes."
+        )
+
+    image = ds.pixel_array * rescale_slope + rescale_intercept
     image *= 100  # Gy to cGy
 
-    if ds.ImageType[3] == "ACQUIRED_DOSE":
-        image /= ds.ExposureSequence[0].MetersetExposure  # cGy / MU
+    image_type = getattr(ds, "ImageType", None)
+    if image_type is None or len(image_type) < 4:
+        raise AttributeError(
+            "DICOM file missing 'ImageType' attribute or it is not in the expected format."
+        )
+
+    if image_type[3] == "ACQUIRED_DOSE":
+        # Check if 'ExposureSequence' exists and has at least one item
+        exposure_sequence = getattr(ds, "ExposureSequence", None)
+        if exposure_sequence is None or len(exposure_sequence) == 0:
+            raise AttributeError(
+                "DICOM file missing 'ExposureSequence' or it is empty."
+            )
+
+        # Check if 'MetersetExposure' exists in the first item of ExposureSequence
+        meterset_exposure = getattr(exposure_sequence[0], "MetersetExposure", None)
+        if meterset_exposure is None:
+            raise AttributeError(
+                "DICOM file missing 'MetersetExposure' in 'ExposureSequence'."
+            )
+
+        image /= meterset_exposure  # cGy / MU
 
     image_height, image_width = image.shape
     image_center_x, image_center_y = image_width / 2, image_height / 2
 
-    row_spacing_mm = float(ds.ImagePlanePixelSpacing[0])
-    col_spacing_mm = float(ds.ImagePlanePixelSpacing[1])
+    row_spacing_mm = (
+        float(ds.ImagePlanePixelSpacing[0])
+        if hasattr(ds, "ImagePlanePixelSpacing")
+        else None
+    )
+    col_spacing_mm = (
+        float(ds.ImagePlanePixelSpacing[1])
+        if hasattr(ds, "ImagePlanePixelSpacing")
+        else None
+    )
 
-    # Prepare to display the image
-    if inspect:
-        _, ax = plt.subplots(figsize=(10, 10))
+    if row_spacing_mm is None or col_spacing_mm is None:
+        raise AttributeError("DICOM file missing 'ImagePlanePixelSpacing' attribute.")
+
+    # Prepare to display or save the image
+    if inspect_mode in ["live", "save"]:
+        fig, ax = plt.subplots(figsize=(10, 10))
         ax.imshow(image, cmap="gray")
+    else:
+        fig, ax = None, None
 
     # Store statistics
     roi_stats = {}
 
-    for roi in roi_config:
+    for roi in roi_config["roi_list"]:
         # Convert angle to radians
         theta_rad = np.deg2rad(-roi["roi_angle"])
 
@@ -285,7 +359,7 @@ def get_roi_stats(ds, roi_config, inspect=False):
         # Compute statistics
         roi_stats[roi["roi_label"]] = np.mean(roi_pixels)
 
-        if inspect:
+        if inspect_mode in ["live", "save"]:
             # Overlay the ROI on the image
             polygon_patch = plt.Polygon(
                 vertices,
@@ -307,16 +381,22 @@ def get_roi_stats(ds, roi_config, inspect=False):
                 fontweight="bold",
             )
 
-    if inspect:
+    if inspect_mode == "live":
         plt.title("DICOM Image with Rotated ROIs")
         plt.axis("off")
         plt.show()
+    elif inspect_mode == "save" and output_dir is not None and image_name is not None:
+        plt.title("DICOM Image with Rotated ROIs")
+        plt.axis("off")
+        # Save the figure
+        fig.savefig(output_dir / f"{image_name}.png", bbox_inches="tight")
+        plt.close(fig)
 
     return roi_stats
 
 
 def get_roi_stats_for_images_in_dir(
-    dirpath, roi_config, inspect=False, normalize=False
+    dirpath, roi_config, inspect_mode=None, normalize=False
 ):
     """
     Process all DICOM images in a directory to calculate ROI statistics.
@@ -326,37 +406,34 @@ def get_roi_stats_for_images_in_dir(
     DataFrame. Optionally, it can normalize the DR-CS ROI statistics by corresponding
     normalization field statistics.
 
-    **Key steps:**
+    Key steps:
 
-    1. **Iterate Over DICOM Files:**
-    - For each DICOM file in the directory:
-        - Read the DICOM dataset.
-        - Adjust ROI angles for rotated images if necessary.
-        - Calculate ROI statistics using `get_roi_stats`.
-        - Store the results along with the file name.
+    1. Iterate Over DICOM Files:
+        - For each DICOM file in the directory:
+            - Read the DICOM dataset.
+            - Extract 'AcquisitionDate' for grouping.
+            - Determine image type based on 'RTImageLabel'.
+            - Adjust ROI angles for rotated images if necessary.
+            - Calculate ROI statistics using `get_roi_stats`.
+            - Store the results along with the file name, RTImageLabel, and AcquisitionDate.
 
-    2. **DataFrame Creation:**
-    - Compile the collected statistics into a pandas DataFrame.
-    - Extract `BaseName` and `Identifier` from the file names, assuming they are in the
-      format `<name>.<identifier>`.
+    2. DataFrame Creation:
+        - Compile the collected statistics into a pandas DataFrame.
 
-    3. **Normalization (Optional):**
-    - If normalization is requested:
-        - Read normalization identifiers from the configuration file (`config.json`).
-        - For each base name, check if both the DR-CS field and normalization field
-          images are present.
-        - Perform element-wise division of the DR-CS ROI stats by the normalization
-          field stats.
-        - Add the normalized results to the DataFrame.
+    3. Normalization (Optional):
+        - If normalization is requested:
+            - Use 'AcquisitionDate' to group images.
+            - Match DR-CS images to open images within the same AcquisitionDate.
+            - Perform normalization by dividing DR-CS ROI stats by the open field ROI stats.
 
-    4. **Additional Statistics:**
-    - Calculate additional statistics such as `Average` and `Max vs Min` for each image.
+    4. Additional Statistics:
+        - Calculate additional statistics such as `Average` and `Max vs Min` for each image.
 
     Args:
         dirpath (pathlib.Path): Path to the directory containing DICOM files.
-        roi_config (list): List of dictionaries containing ROI configuration parameters.
-        inspect (bool, optional): If `True`, displays images with ROIs overlaid during
-            processing. Defaults to `False`.
+        roi_config (dict): Dictionary containing ROI configuration parameters and RTImageLabels.
+        inspect_mode (str, optional): If 'live', displays images with ROIs overlaid during
+            processing. If 'save', saves images with ROIs overlaid to files. Defaults to None.
         normalize (bool, optional): If `True`, normalizes DR-CS ROI stats by the
             normalization field stats. Defaults to `False`.
 
@@ -373,113 +450,179 @@ def get_roi_stats_for_images_in_dir(
     dicom_fpaths = list(dirpath.glob("*.dcm"))
     dicom_fpath_count = len(dicom_fpaths)
 
+    if inspect_mode == "save":
+        output_image_dir = dirpath / "output_images"
+        output_image_dir.mkdir(exist_ok=True)
+    else:
+        output_image_dir = None
+
     for i, dicom_fpath in enumerate(dicom_fpaths, start=1):
-        print(f"Analyzing DICOM file {i} of {dicom_fpath_count}: {dicom_fpath.name}")
+        logger.info(
+            "Analyzing DICOM file %i of %i: %s", i, dicom_fpath_count, dicom_fpath.name
+        )
+
+        ds_modality_only = pydicom.dcmread(dicom_fpath, specific_tags=["Modality"])
+        if ds_modality_only.Modality != "RTIMAGE":
+            logger.info("Skipping non-RTIMAGE file: %s", dicom_fpath.name)
+            continue
+
         ds = pydicom.dcmread(dicom_fpath)
 
-        # Create a deep copy to avoid modifying the original roi_config
-        roi_config_copy = copy.deepcopy(roi_config)
+        # Get RTImageLabel and make it lowercase for case-insensitive comparison
+        rt_image_label = getattr(ds, "RTImageLabel", "").lower()
+
+        # Get AcquisitionDate
+        acquisition_date = getattr(ds, "AcquisitionDate", None)
+        if acquisition_date is None:
+            logger.warning("Missing 'AcquisitionDate' in file '%s'", dicom_fpath.name)
+            continue
+
+        # Determine image type based on RTImageLabel
+        if rt_image_label in roi_config["drcs_rtimage_labels"]:
+            image_type = "DRCS"
+        elif rt_image_label in roi_config["open_rtimage_labels"]:
+            image_type = "OPEN"
+        else:
+            logger.warning(
+                "Unrecognized RTImageLabel '%s' in file '%s'",
+                rt_image_label,
+                dicom_fpath.name,
+            )
+            image_type = "UNKNOWN"
+
+        # Skip images with unrecognized RTImageLabel
+        if image_type == "UNKNOWN":
+            continue
 
         # Adjust ROI angles for "_A" files (rotated images)
+        roi_config_copy = copy.deepcopy(roi_config)
         if "_A" in dicom_fpath.stem:
-            for roi in roi_config_copy:
+            for roi in roi_config_copy["roi_list"]:
                 roi["roi_angle"] = (roi["roi_angle"] - 180) % 360
 
-        # Get ROI statistics for the current image
-        roi_stats = get_roi_stats(ds, roi_config_copy, inspect=inspect)
-        roi_stats["File"] = dicom_fpath.stem  # Add the file name to the stats
-        roi_stats_all.append(roi_stats)
+        try:
+            # Get ROI statistics for the current image
+            roi_stats = get_roi_stats(
+                ds,
+                roi_config_copy,
+                inspect_mode=inspect_mode,
+                output_dir=output_image_dir,
+                image_name=dicom_fpath.stem,
+            )
+            roi_stats["File"] = dicom_fpath.stem  # Add the file name to the stats
+            roi_stats["RTImageLabel"] = rt_image_label
+            roi_stats["ImageType"] = image_type
+            roi_stats["AcquisitionDate"] = acquisition_date
+            roi_stats_all.append(roi_stats)
+        except AttributeError as e:
+            logger.error("Error processing file %s: %s", dicom_fpath.name, e)
+            continue
 
     # Compile the statistics into a DataFrame
     df = pd.DataFrame(roi_stats_all)
 
-    # Use the 'File' column to extract basenames and identifiers
-    # Assuming file names are in the format <name>.<identifier>
-    df[["BaseName", "Identifier"]] = df["File"].str.rsplit(".", n=1, expand=True)
-    df["Identifier"] = df["Identifier"].str.lower()  # Ensure identifiers are lowercase
+    # Check if the DataFrame is empty
+    if df.empty:
+        logger.warning("No valid images were processed; the DataFrame is empty.")
+        return df  # Return the empty DataFrame to avoid further processing
+
+    for col in ROI_LABELS:
+        df[col] = pd.to_numeric(df[col])
 
     # If normalize is True, process normalization
     if normalize:
-        # Read the identifiers from the JSON config
-        config_path = dirpath / "config.json"
-        try:
-            with open(config_path, "r") as f:
-                config = json.load(f)
-            normalization_identifiers = config.get("normalization_identifiers", {})
-
-        except FileNotFoundError as exc:
-            raise FileNotFoundError(
-                f"Configuration file not found at {config_path}"
-            ) from exc
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Invalid JSON format in configuration file {config_path}"
-            ) from exc
-
-        # Get the normalization identifiers from the config
-        normalization_identifiers = config.get("normalization_identifiers", {})
-        drcs_field = normalization_identifiers.get("drcs_field", "rad").lower()
-        norm_field = normalization_identifiers.get("norm_field", "open").lower()
+        # Group the DataFrame by 'AcquisitionDate'
+        group_key = "AcquisitionDate"
+        grouped = df.groupby(group_key)
 
         # Initialize a list to store normalized data
         normalized_data = []
 
-        # Group the DataFrame by 'BaseName'
-        grouped = df.groupby("BaseName")
+        for group_id, group in grouped:
+            # Check if both DRCS and OPEN images are present in the group
+            image_types = set(group["ImageType"])
+            if "OPEN" not in image_types:
+                logger.warning(
+                    "Open image not found for AcquisitionDate '%s'", group_id
+                )
+                continue
+            open_images = group[group["ImageType"] == "OPEN"]
+            open_image = open_images.iloc[0]
 
-        for base_name, group in grouped:
-            # Check if both drcs_field and norm_field images are present
-            if {drcs_field, norm_field}.issubset(set(group["Identifier"])):
-                # Get the rows for drcs_field and norm_field
-                dr_row = group[group["Identifier"] == drcs_field].iloc[0]
-                norm_row = group[group["Identifier"] == norm_field].iloc[0]
+            drcs_images = group[group["ImageType"] == "DRCS"]
 
+            for idx, drcs_image in drcs_images.iterrows():
                 # Exclude non-ROI columns
-                non_roi_columns = ["File", "BaseName", "Identifier"]
+                non_roi_columns = ["File", "RTImageLabel", "ImageType", group_key]
                 roi_columns = [
                     col
                     for col in df.columns
                     if col not in non_roi_columns and not df[col].dtype == "object"
                 ]
 
-                # Perform element-wise division of drcs_field by norm_field ROI stats
-                normalized_values = dr_row[roi_columns] / norm_row[roi_columns]
+                # Perform element-wise division of DRCS ROI stats by OPEN ROI stats
+                normalized_values = drcs_image[roi_columns] / open_image[roi_columns]
 
-                # Create a new row with 'Identifier' = 'DR_NORM'
-                norm_row_dict = {
-                    "File": f"{base_name}.DR_NORM",
-                    "BaseName": base_name,
-                    "Identifier": "DR_NORM",
-                }
-                norm_row_dict.update(normalized_values.to_dict())
+                # Create a new row as a dictionary with both non-ROI and ROI columns
+                norm_row_dict = drcs_image[non_roi_columns].to_dict()
+                norm_row_dict["ImageType"] = "NORMALIZED"
+                for col in roi_columns:
+                    norm_row_dict[col] = normalized_values[col]
 
                 normalized_data.append(norm_row_dict)
-            else:
-                print(
-                    f"Warning: Missing '{drcs_field}' or '{norm_field}' image for base name '{base_name}'"
-                )
-
         # Create a DataFrame from the normalized data
         df_normalized = pd.DataFrame(normalized_data)
 
         # Append the normalized data to the original DataFrame
         df = pd.concat([df, df_normalized], ignore_index=True)
 
-        df.drop(columns=["BaseName", "Identifier"], inplace=True)
-
     # Now, compute additional statistics like 'Average' and 'Max vs Min'
     # Exclude non-ROI columns
-    non_roi_columns = ["File", "BaseName", "Identifier"]
+    non_roi_columns = ["File", "RTImageLabel", "ImageType", "AcquisitionDate"]
     roi_columns = [
         col
         for col in df.columns
         if col not in non_roi_columns and not df[col].dtype == "object"
     ]
 
-    df["Average"] = df[roi_columns].mean(axis=1)
-    df["Max vs Min"] = df[roi_columns].max(axis=1) / df[roi_columns].min(axis=1) - 1
+    if roi_columns:
+        # Perform calculations
+        df["Average"] = df[roi_columns].mean(axis=1)
+        min_values = df[roi_columns].min(axis=1).replace(0, np.nan)
+        df["Max vs Min"] = df[roi_columns].max(axis=1) / min_values - 1
+        df.fillna({"Max vs Min": np.inf}, inplace=True)
+    else:
+        logger.warning("No ROI columns found in the DataFrame; skipping calculations.")
+
+    # Reorder columns to have 'File' as the leftmost column
+    desired_order = (
+        ["File", "RTImageLabel", "ImageType", "AcquisitionDate"]
+        + roi_columns
+        + ["Average", "Max vs Min"]
+    )
+    # Ensure all desired columns are present in the DataFrame
+    ordered_columns = [col for col in desired_order if col in df.columns]
+    # Add any other columns that are not specified in desired_order
+    other_columns = [col for col in df.columns if col not in ordered_columns]
+    # Reorder the DataFrame columns
+    df = df[ordered_columns + other_columns]
 
     return df
+
+
+def open_file(filepath):
+    """
+    Open a file using the default application based on the operating system.
+
+    Args:
+        filepath (pathlib.Path): The path to the file to be opened.
+    """
+    if platform.system() == "Windows":
+        os.startfile(filepath)
+    elif platform.system() == "Darwin":  # macOS
+        subprocess.run(["open", filepath])
+    else:  # Linux and other Unix systems
+        subprocess.run(["xdg-open", filepath])
 
 
 def main():
@@ -491,7 +634,7 @@ def main():
     directory. It calculates statistics for each ROI and outputs the results to CSV and
     Excel files.
 
-    **Features:**
+    Features:
 
     - Processes all DICOM images in the input directory.
     - Optionally displays images with ROIs overlaid for visual inspection.
@@ -499,11 +642,12 @@ def main():
       based on image pairs.
     - Optionally opens the output CSV or Excel file after processing.
 
-    **Command-line arguments:**
+    Command-line arguments:
 
     - `input_directory` (str): Path to the input directory containing DICOM files and
       `config.json`.
-    - `--inspect`: If specified, displays images with ROIs overlaid during processing.
+    - `--inspect-live`: If specified, displays images with ROIs overlaid during processing.
+    - `--inspect-save`: If specified, saves images with ROIs overlaid to files.
     - `--normalize`: If specified, normalizes DR-CS ROI stats by the normalization
       field stats.
     - `--open-csv`: If specified, automatically opens the output CSV file after
@@ -519,9 +663,14 @@ def main():
         help="Path to the input directory containing DICOM files.",
     )
     parser.add_argument(
-        "--inspect",
+        "--inspect-live",
         action="store_true",
-        help="Display images with ROIs overlaid.",
+        help="Display images with ROIs overlaid during processing.",
+    )
+    parser.add_argument(
+        "--inspect-save",
+        action="store_true",
+        help="Save images with ROIs overlaid to files.",
     )
     parser.add_argument(
         "--normalize",
@@ -543,29 +692,49 @@ def main():
     data_dirpath = pathlib.Path(args.input_directory)
     config_path = data_dirpath / "config.json"
 
-    # Load ROI configuration
-    roi_config = load_roi_config(config_path)
+    # Determine inspect mode
+    inspect_mode = None
+    if args.inspect_live:
+        inspect_mode = "live"
+    elif args.inspect_save:
+        inspect_mode = "save"
 
-    df = get_roi_stats_for_images_in_dir(
-        data_dirpath, roi_config, inspect=args.inspect, normalize=args.normalize
-    )
+    # Load ROI configuration
+    try:
+        roi_config = load_roi_config(config_path)
+    except (FileNotFoundError, ValueError) as e:
+        logger.error("Error loading ROI configuration: %s", e)
+        sys.exit(1)
+
+    try:
+        df = get_roi_stats_for_images_in_dir(
+            data_dirpath,
+            roi_config,
+            inspect_mode=inspect_mode,
+            normalize=args.normalize,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        logger.error("Error processing images: %s", e)
+        sys.exit(1)
 
     csv_savepath = data_dirpath / "roi_stats.csv"
     excel_savepath = data_dirpath / "roi_stats.xlsx"
 
     # Save the results
-    df.to_csv(csv_savepath)
-    df.to_excel(excel_savepath)
+    df.to_csv(csv_savepath, index=False)
+    df.to_excel(excel_savepath, index=False)
 
-    print(
-        f"Processing complete. Results saved to:\n\t{csv_savepath}\n\t{excel_savepath}"
+    logger.info(
+        "Processing complete. Results saved to:\n\t%s\n\t%s",
+        csv_savepath,
+        excel_savepath,
     )
 
     if args.open_csv:
-        os.startfile(csv_savepath)
+        open_file(csv_savepath)
 
     if args.open_excel:
-        os.startfile(excel_savepath)
+        open_file(excel_savepath)
 
 
 if __name__ == "__main__":

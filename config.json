@@ -4,9 +4,6 @@
     "roi_height_mm": 10,
     "roi_angles": [150, 210, 270, 330, 30],
     "roi_colors": ["blue", "red", "yellow", "purple", "green"],
-    "roi_labels": ["A", "B", "C", "D", "E"],
-    "normalization_identifiers": {
-        "drcs_field": "rad",
-        "norm_field": "open"
-    }
+    "open_rtimage_labels": ["mv_0_1a", "open"],
+    "drcs_rtimage_labels": ["mv_182_1a", "rad_qa_hdmlc", "ra2"]
 }
