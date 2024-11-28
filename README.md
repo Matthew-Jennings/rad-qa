@@ -32,6 +32,7 @@ Analyse DR-CS is a Python script designed to process and analyze DICOM RTImages 
 
 - **Automated Analysis**: Processes DICOM images to calculate statistics for predefined Regions of Interest (ROIs).
 - **Normalization**: Optionally normalizes DR-CS ROI statistics by corresponding open field images based on `AcquisitionDate`.
+  - Open field images and DR-CS field images are differentiated by _RTImageLabel_. Users can edit `config.json` to configure supported open and DR-CS _RTImageLabel_ values.
 - **Visualization**: Supports live display or saving of images with ROIs overlaid for visual inspection.
 - **Flexible Configuration**: Uses a JSON configuration file to define ROI parameters and matching criteria.
 
