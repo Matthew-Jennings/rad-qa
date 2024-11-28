@@ -183,11 +183,3 @@ Ensure that the `config.json` file in `test/data` matches the expected configura
 ### Continuous Integration
 
 This project uses GitHub Actions for continuous integration. The tests are automatically run on GitHub whenever changes are pushed to the repository or a pull request is opened.
-
-## Disclaimer:
-
-This script is provided as-is and is intended for use by qualified professionals.
-
-## Contact Information:
-
-For questions or support, please contact matthew.jennings@icon.team.
