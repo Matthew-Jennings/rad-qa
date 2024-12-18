@@ -471,14 +471,14 @@ def get_roi_stats_for_images_in_dir(
             image_type = "OPEN"
         else:
             logger.warning(
-                "Unrecognized RTImageLabel '%s' in file '%s'",
+                "Unrecognized RTImageLabel '%s' in file '%s'. Consider adding to config.",
                 rt_image_label,
                 dicom_fpath.name,
             )
             image_type = "UNKNOWN"
 
-        # if image_type == "UNKNOWN":
-        #     continue
+        if image_type == "UNKNOWN":
+            continue
 
         roi_config_copy = copy.deepcopy(roi_config)
         # Adjust ROI angles for rotated images (indicated by "_A" in filename)

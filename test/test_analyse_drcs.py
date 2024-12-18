@@ -329,7 +329,7 @@ def test_open_file_windows(monkeypatch):
     monkeypatch.setattr(platform, "system", lambda: "Windows")
     with mock.patch("os.startfile") as mock_startfile:
         analyse_drcs.open_file(filepath)
-        mock_startfile.assert_called_once_with(filepath)
+        mock_startfile.assert_called_once_with(str(filepath))  # Convert to string
 
 
 def test_open_file_macos(monkeypatch):
@@ -338,7 +338,9 @@ def test_open_file_macos(monkeypatch):
     monkeypatch.setattr(platform, "system", lambda: "Darwin")
     with mock.patch("subprocess.run") as mock_run:
         analyse_drcs.open_file(filepath)
-        mock_run.assert_called_once_with(["open", filepath], check=True)
+        mock_run.assert_called_once_with(
+            ["open", str(filepath)], check=True
+        )  # Convert to string
 
 
 def test_open_file_linux(monkeypatch):
@@ -347,7 +349,9 @@ def test_open_file_linux(monkeypatch):
     monkeypatch.setattr(platform, "system", lambda: "Linux")
     with mock.patch("subprocess.run") as mock_run:
         analyse_drcs.open_file(filepath)
-        mock_run.assert_called_once_with(["xdg-open", filepath], check=True)
+        mock_run.assert_called_once_with(
+            ["xdg-open", str(filepath)], check=True
+        )  # Convert to string
 
 
 def test_no_dicom_files(tmp_path, roi_config, caplog):
