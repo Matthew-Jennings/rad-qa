@@ -636,7 +636,7 @@ def main() -> None:
     parser.add_argument(
         "--inspect-save",
         action="store_true",
-        help="Save images with ROIs overlaid to files.",
+        help="Save images with ROIs overlaid to files to the input directory.",
     )
     parser.add_argument(
         "--normalize",
