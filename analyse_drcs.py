@@ -59,7 +59,7 @@ import sys
 import platform
 import subprocess
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import pydicom
@@ -68,9 +68,9 @@ import matplotlib.pyplot as plt
 from skimage.draw import polygon
 from pydicom.dataset import FileDataset
 
-# Configure logging
+# Configure default logging to INFO. This will be overridden after loading config.
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(filename)s:%(lineno)d | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -139,13 +139,14 @@ def load_roi_config(config_path: pathlib.Path) -> Dict[str, Any]:
     - roi_colors (list of strings, length 5)
     - open_rtimage_labels (list of strings)
     - drcs_rtimage_labels (list of strings)
+    - log_level (string, optional): DEBUG, INFO, WARNING, ERROR, CRITICAL
 
     Args:
         config_path: Path to the configuration JSON file.
 
     Returns:
         A dictionary containing ROI configuration, including 'roi_list',
-        'open_rtimage_labels', and 'drcs_rtimage_labels'.
+        'open_rtimage_labels', 'drcs_rtimage_labels', and 'log_level'.
 
     Raises:
         FileNotFoundError: If the configuration file is not found.
@@ -159,8 +160,8 @@ def load_roi_config(config_path: pathlib.Path) -> Dict[str, Any]:
     try:
         with open(config_path, "r", encoding="utf-8-sig") as f:
             config = json.load(f)
-    except json.JSONDecodeError as exc:
-        logger.error("Invalid JSON format in configuration file %s", config_path)
+    except json.JSONDecodeError:
+        logger.exception("Invalid JSON format in configuration file %s", config_path)
         raise
 
     logger.debug("Loaded config: %s", config)
@@ -211,10 +212,21 @@ def load_roi_config(config_path: pathlib.Path) -> Dict[str, Any]:
     open_rtimage_labels = [label.lower() for label in open_rtimage_labels]
     drcs_rtimage_labels = [label.lower() for label in drcs_rtimage_labels]
 
+    # Read log_level from config, default to INFO if not specified
+    log_level_str = config.get("log_level", "INFO").upper()
+    valid_log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+    if log_level_str not in valid_log_levels:
+        logger.warning(
+            "Invalid 'log_level' specified in config: '%s'. Defaulting to 'INFO'.",
+            log_level_str,
+        )
+        log_level_str = "INFO"
+
     roi_config: Dict[str, Any] = {
         "roi_list": roi_config_list,
         "open_rtimage_labels": open_rtimage_labels,
         "drcs_rtimage_labels": drcs_rtimage_labels,
+        "log_level": log_level_str,  # Added log_level to configuration
     }
 
     logger.debug("Final ROI configuration:\n%s", roi_config)
@@ -227,7 +239,7 @@ def get_roi_stats(
     inspect_mode: Optional[str] = None,
     output_dir: Optional[pathlib.Path] = None,
     image_name: Optional[str] = None,
-) -> Dict[str, float]:
+) -> Tuple[Dict[str, float], bool]:
     """Calculate statistics for ROIs in a single DICOM image.
 
     This function:
@@ -244,7 +256,10 @@ def get_roi_stats(
         image_name: Name used for saved images.
 
     Returns:
-        A dictionary mapping each ROI label (e.g., "A") to its mean pixel value.
+        A tuple containing:
+            - A dictionary mapping each ROI label (e.g., "A") to its mean pixel value.
+            - A boolean indicating whether the image is acquired (`True`) or predicted
+              (`False`).
 
     Raises:
         AttributeError: If required DICOM attributes (RescaleSlope, ImageType, etc.)
@@ -269,7 +284,7 @@ def get_roi_stats(
         logger.error("Missing 'ImageType' attribute in DICOM.")
         raise AttributeError("DICOM file missing 'ImageType' attribute.")
 
-    # If acquired dose, normalize by MetersetExposure
+    # Determine if the image is acquired or predicted
     try:
         is_acquired = image_type_attr[3] == "ACQUIRED_DOSE"
     except IndexError:
@@ -292,6 +307,10 @@ def get_roi_stats(
 
         image /= meterset_exposure  # cGy/MU
         logger.debug("Normalized acquired dose image by MetersetExposure.")
+    else:
+        logger.debug(
+            "Image is predicted; no normalization by MetersetExposure applied."
+        )
 
     image_height, image_width = image.shape
     image_center_x, image_center_y = image_width / 2, image_height / 2
@@ -312,7 +331,8 @@ def get_roi_stats(
         raise AttributeError("DICOM file missing 'ImagePlanePixelSpacing' attribute.")
 
     logger.debug(
-        "Image dimensions (px): %dx%d, center=(%.2f, %.2f), pixel spacing=(%.2fmm, %.2fmm)",
+        "Image dimensions (px): %dx%d, center=(%.2f, %.2f), "
+        "pixel spacing=(%.2fmm, %.2fmm)",
         image_width,
         image_height,
         image_center_x,
@@ -402,7 +422,7 @@ def get_roi_stats(
         plt.close(fig)
         logger.debug("Saved ROI overlay image to %s", save_path)
 
-    return roi_stats
+    return roi_stats, is_acquired  # Modified return statement
 
 
 def get_roi_stats_for_images_in_dir(
@@ -419,7 +439,7 @@ def get_roi_stats_for_images_in_dir(
        provided in the ROI configuration.
     3. Calculates ROI statistics for each valid image.
     4. Optionally normalizes DR-CS ROI stats by corresponding OPEN fields grouped by
-       AcquisitionDate.
+       AcquisitionDate and Group (acquired/predicted).
     5. Returns a pandas DataFrame with all ROI statistics, as well as computed
        "Average" and "Max vs Min" columns.
 
@@ -460,7 +480,8 @@ def get_roi_stats_for_images_in_dir(
 
         if acquisition_date is None and normalize:
             logger.warning(
-                "Missing 'AcquisitionDate' in file '%s'. This is required for normalisation",
+                "Missing 'AcquisitionDate' in file '%s'. "
+                "This is required for normalization",
                 dicom_fpath.name,
             )
             continue
@@ -471,7 +492,8 @@ def get_roi_stats_for_images_in_dir(
             image_type = "OPEN"
         else:
             logger.warning(
-                "Unrecognized RTImageLabel '%s' in file '%s'. Consider adding to config.",
+                "Unrecognized RTImageLabel '%s' in file '%s'. "
+                "Consider adding to config.",
                 rt_image_label,
                 dicom_fpath.name,
             )
@@ -488,16 +510,24 @@ def get_roi_stats_for_images_in_dir(
                 roi["roi_angle"] = (roi["roi_angle"] - 180) % 360
 
         try:
-            roi_stats = get_roi_stats(
+            roi_stats, is_acquired = get_roi_stats(
                 ds,
                 roi_config_copy,
                 inspect_mode=inspect_mode,
                 output_dir=output_image_dir,
                 image_name=dicom_fpath.stem,
             )
+            # Modify ImageType based on is_acquired flag
+            if image_type == "DRCS":
+                image_type_final = "DRCS" if is_acquired else "DRCS PREDICTED"
+            elif image_type == "OPEN":
+                image_type_final = "OPEN" if is_acquired else "OPEN PREDICTED"
+            else:
+                image_type_final = image_type  # Shouldn't reach here
+
             roi_stats["File"] = dicom_fpath.stem
             roi_stats["RTImageLabel"] = rt_image_label
-            roi_stats["ImageType"] = image_type
+            roi_stats["ImageType"] = image_type_final  # Updated ImageType
             roi_stats["AcquisitionDate"] = acquisition_date
             roi_stats_all.append(roi_stats)
         except AttributeError as e:
@@ -512,54 +542,126 @@ def get_roi_stats_for_images_in_dir(
     for col in ROI_LABELS:
         df[col] = pd.to_numeric(df[col])
 
+    # Warn if there is more than one "OPEN PREDICTED" or "DRCS PREDICTED" per
+    # AcquisitionDate
+    for image_type in ["OPEN PREDICTED", "DRCS PREDICTED"]:
+        counts = df[df["ImageType"] == image_type].groupby("AcquisitionDate").size()
+        multiple = counts[counts > 1]
+        if not multiple.empty:
+            for date, count in multiple.iteritems():
+                logger.warning(
+                    "More than one '%s' image for AcquisitionDate '%s'. "
+                    "Found %d instances.",
+                    image_type,
+                    date,
+                    count,
+                )
+
+    # Add a 'Group' column to differentiate between acquired and predicted images
+    def determine_group(image_type: str) -> Optional[str]:
+        if image_type in ["DRCS", "OPEN"]:
+            return "acquired"
+        elif image_type in ["DRCS PREDICTED", "OPEN PREDICTED"]:
+            return "predicted"
+        else:
+            return None
+
+    df["Group"] = df["ImageType"].apply(determine_group)
+
     if normalize:
-        logger.debug("Normalizing DR-CS ROI stats by open field stats.")
-        group_key = "AcquisitionDate"
-        grouped = df.groupby(group_key)
+        logger.debug("Normalizing ROI stats by corresponding normalization fields.")
+        non_roi_columns = [
+            "File",
+            "RTImageLabel",
+            "ImageType",
+            "AcquisitionDate",
+            "Group",
+        ]
+        roi_columns = [
+            c
+            for c in df.columns
+            if c not in non_roi_columns and pd.api.types.is_numeric_dtype(df[c])
+        ]
         normalized_data: List[Dict[str, Any]] = []
 
-        for group_id, group in grouped:
-            image_types = set(group["ImageType"])
-            if "OPEN" not in image_types:
-                logger.warning(
-                    "Open image not found for AcquisitionDate '%s'", group_id
-                )
-                continue
-            open_images = group[group["ImageType"] == "OPEN"]
-            open_image = open_images.iloc[0]
+        # Group by AcquisitionDate and Group (acquired/predicted)
+        grouped = df.groupby(["AcquisitionDate", "Group"])
 
-            drcs_images = group[group["ImageType"] == "DRCS"]
+        for (acq_date, group), group_df in grouped:
+            if group == "acquired":
+                open_images = group_df[group_df["ImageType"] == "OPEN"]
+                if len(open_images) == 0:
+                    logger.warning(
+                        "Missing 'OPEN' image for AcquisitionDate '%s'. "
+                        "Skipping normalization for this group.",
+                        acq_date,
+                    )
+                    continue
+                elif len(open_images) > 1:
+                    logger.warning(
+                        "Multiple 'OPEN' images for AcquisitionDate '%s'. "
+                        "Using the first one for normalization.",
+                        acq_date,
+                    )
+                open_image = open_images.iloc[0]
 
-            for _, drcs_image in drcs_images.iterrows():
-                non_roi_columns = ["File", "RTImageLabel", "ImageType", group_key]
-                roi_columns = [
-                    c
-                    for c in df.columns
-                    if c not in non_roi_columns and not df[c].dtype == "object"
-                ]
+                drcs_images = group_df[group_df["ImageType"] == "DRCS"]
 
-                normalized_values = drcs_image[roi_columns] / open_image[roi_columns]
+                for _, drcs_image in drcs_images.iterrows():
+                    normalized_values = (
+                        drcs_image[roi_columns] / open_image[roi_columns]
+                    )
+                    norm_row_dict = drcs_image[non_roi_columns].to_dict()
+                    norm_row_dict["ImageType"] = "NORMALIZED"
+                    for c in roi_columns:
+                        norm_row_dict[c] = float(normalized_values[c])
+                    normalized_data.append(norm_row_dict)
 
-                norm_row_dict = drcs_image[non_roi_columns].to_dict()
-                norm_row_dict["ImageType"] = "NORMALIZED"
-                for c in roi_columns:
-                    norm_row_dict[c] = float(normalized_values[c])
+            elif group == "predicted":
+                open_pred_images = group_df[group_df["ImageType"] == "OPEN PREDICTED"]
+                if len(open_pred_images) == 0:
+                    logger.warning(
+                        "Missing 'OPEN PREDICTED' image for AcquisitionDate '%s'. "
+                        "Skipping normalization for this group.",
+                        acq_date,
+                    )
+                    continue
+                elif len(open_pred_images) > 1:
+                    logger.warning(
+                        "Multiple 'OPEN PREDICTED' images for AcquisitionDate '%s'. "
+                        "Using the first one for normalization.",
+                        acq_date,
+                    )
+                open_pred_image = open_pred_images.iloc[0]
 
-                normalized_data.append(norm_row_dict)
+                drcs_pred_images = group_df[group_df["ImageType"] == "DRCS PREDICTED"]
+
+                for _, drcs_image in drcs_pred_images.iterrows():
+                    normalized_values = (
+                        drcs_image[roi_columns] / open_pred_image[roi_columns]
+                    )
+                    norm_row_dict = drcs_image[non_roi_columns].to_dict()
+                    norm_row_dict["ImageType"] = "NORMALIZED"
+                    for c in roi_columns:
+                        norm_row_dict[c] = float(normalized_values[c])
+                    normalized_data.append(norm_row_dict)
 
         if normalized_data:
             df_normalized = pd.DataFrame(normalized_data)
             df = pd.concat([df, df_normalized], ignore_index=True)
+            logger.debug("Added normalized data to the DataFrame.")
         else:
             logger.debug(
-                "No normalized data was generated (no DRCS-OPEN pairs matched)."
+                "No normalized data was generated (no DRCS-OPEN or "
+                "DRCS PREDICTED-OPEN PREDICTED pairs matched)."
             )
 
-    non_roi_columns = ["File", "RTImageLabel", "ImageType", "AcquisitionDate"]
+    # Calculate 'Average' and 'Max vs Min' columns
+    non_roi_columns = ["File", "RTImageLabel", "ImageType", "AcquisitionDate", "Group"]
     roi_columns = [
         c
         for c in df.columns
-        if c not in non_roi_columns and not df[c].dtype == "object"
+        if c not in non_roi_columns and pd.api.types.is_numeric_dtype(df[c])
     ]
 
     if roi_columns:
@@ -578,6 +680,11 @@ def get_roi_stats_for_images_in_dir(
     ordered_columns = [c for c in desired_order if c in df.columns]
     other_columns = [c for c in df.columns if c not in ordered_columns]
     df = df[ordered_columns + other_columns]
+
+    # Drop the 'Group' column before saving to exclude it from output files
+    if "Group" in df.columns:
+        df = df.drop(columns=["Group"])
+        logger.debug("Dropped 'Group' column from the DataFrame for output.")
 
     logger.debug("Final DataFrame:\n%s", df.head())
     return df
@@ -607,10 +714,11 @@ def main() -> None:
     Steps performed:
     1. Parse command-line arguments.
     2. Load ROI configuration from a specified or default config file.
-    3. Process all DICOM images in the input directory to calculate ROI statistics.
-    4. Optionally normalize the DR-CS statistics by corresponding OPEN fields.
-    5. Save results to CSV and Excel files.
-    6. Optionally open the CSV or Excel results file.
+    3. Configure logging based on the 'log_level' from config.
+    4. Process all DICOM images in the input directory to calculate ROI statistics.
+    5. Optionally normalize the DR-CS statistics by corresponding OPEN fields.
+    6. Save results to CSV and Excel files.
+    7. Optionally open the CSV or Excel results file.
 
     Raises:
         SystemExit: If the configuration cannot be loaded or if image processing
@@ -626,7 +734,8 @@ def main() -> None:
         "--config",
         type=str,
         default=None,
-        help="Path to the configuration JSON file. If not provided, defaults to 'config.json' in the input directory.",
+        help="Path to the configuration JSON file. If not provided, defaults to "
+        "'config.json' in the input directory.",
     )
     parser.add_argument(
         "--inspect-live",
@@ -656,10 +765,12 @@ def main() -> None:
     args = parser.parse_args()
 
     data_dirpath = pathlib.Path(args.input_directory)
-    # Use the provided config path if given, otherwise default to input_directory/config.json
+    # Use the provided config path if given, otherwise default to
+    # input_directory/config.json
     config_path = (
         pathlib.Path(args.config) if args.config else data_dirpath / "config.json"
     )
+    # Initial log to inform user about config loading
     logger.info("Starting DR-CS analysis for directory: %s", data_dirpath)
     logger.info("Using config file: %s", config_path)
 
@@ -675,6 +786,19 @@ def main() -> None:
         logger.error("Error loading ROI configuration: %s", e)
         sys.exit(1)
 
+    # Configure logging level based on config after loading
+    log_level_str = roi_config.get("log_level", "INFO").upper()
+    numeric_level = getattr(logging, log_level_str, None)
+    if not isinstance(numeric_level, int):
+        logger.warning("Invalid 'log_level' '%s'. Defaulting to 'INFO'.", log_level_str)
+        numeric_level = logging.INFO
+
+    # Update logger level
+    logger.setLevel(numeric_level)
+    for handler in logger.handlers:
+        handler.setLevel(numeric_level)
+    logger.debug("Logging level set to %s.", log_level_str)
+
     try:
         df = get_roi_stats_for_images_in_dir(
             data_dirpath,
@@ -686,10 +810,16 @@ def main() -> None:
         logger.error("Error processing images: %s", e)
         sys.exit(1)
 
+    # Drop the 'Group' column if it exists to exclude it from output files
+    if "Group" in df.columns:
+        df = df.drop(columns=["Group"])
+        logger.debug("Dropped 'Group' column from the DataFrame for output.")
+
     csv_savepath = data_dirpath / "roi_stats.csv"
     excel_savepath = data_dirpath / "roi_stats.xlsx"
 
     df.to_csv(csv_savepath, index=False)
+    logger.info("Saved ROI statistics to CSV: %s", csv_savepath)
 
     with pd.ExcelWriter(excel_savepath, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name="Results")
@@ -701,31 +831,40 @@ def main() -> None:
         dp4_format = workbook.add_format({"num_format": "0.0000"})
         dp5_format = workbook.add_format({"num_format": "0.00000"})
 
-        # Set 4 dp float format for sector columns
-        for roi_label in ["A", "B", "C", "D", "E", "Average"]:
-            col_index = df.columns.get_loc(roi_label)
-            worksheet.set_column(col_index, col_index, None, dp4_format)
+        # Set 4 dp float format for ROI columns
+        for roi_label in ["A", "B", "C", "D", "E"]:
+            if roi_label in df.columns:
+                col_index = df.columns.get_loc(roi_label)
+                worksheet.set_column(col_index, col_index, None, dp4_format)
 
-        # Set 5 dp float format for sector columns and Average
-        col_index = df.columns.get_loc("Average")
-        worksheet.set_column(col_index, col_index, None, dp5_format)
+        # Set 5 dp float format for "Average"
+        if "Average" in df.columns:
+            avg_col = df.columns.get_loc("Average")
+            worksheet.set_column(avg_col, avg_col, None, dp5_format)
 
         # Set 2 dp percentage format for "Max vs Min"
-        max_vs_min_col = df.columns.get_loc("Max vs Min")
-        worksheet.set_column(max_vs_min_col, max_vs_min_col, None, percentage_format)
+        if "Max vs Min" in df.columns:
+            max_vs_min_col = df.columns.get_loc("Max vs Min")
+            worksheet.set_column(
+                max_vs_min_col, max_vs_min_col, None, percentage_format
+            )
 
-    logger.info(
-        "Processing complete. Results saved to:\n\t%s\n\t%s",
-        csv_savepath,
-        excel_savepath,
-    )
+    logger.info("Saved ROI statistics to Excel: %s", excel_savepath)
     logger.debug("Saved CSV and Excel results.")
 
     if args.open_csv:
-        open_file(csv_savepath)
+        try:
+            open_file(csv_savepath)
+            logger.debug("Opened CSV file: %s", csv_savepath)
+        except Exception:
+            logger.exception("Failed to open CSV file '%s'.", csv_savepath)
 
     if args.open_excel:
-        open_file(excel_savepath)
+        try:
+            open_file(excel_savepath)
+            logger.debug("Opened Excel file: %s", excel_savepath)
+        except Exception:
+            logger.exception("Failed to open Excel file '%s'", excel_savepath)
 
 
 if __name__ == "__main__":
