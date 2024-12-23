@@ -382,8 +382,10 @@ def plot_relative_to_sector_or_average(
     sector_norm : str, optional
         Sector to use as a reference, or "Average" for mean reference, by default "A".
     """
+    df_unnormed = df.loc[df["ImageType"] == "DRCS"].copy(deep=True)
+
     if sector_norm == "Average":
-        df_rel_to_col = df.copy(deep=True)
+        df_rel_to_col = df_unnormed.copy(deep=True)
         sector_cols = list(SECTOR_COLOR_MAP)
         mean_values = df_rel_to_col[sector_cols].mean(axis=1)
         df_rel_to_col[sector_cols] = (
@@ -393,7 +395,7 @@ def plot_relative_to_sector_or_average(
             .astype(float)
         )
     else:
-        df_rel_to_col = _make_relative_to_col(df, col_label=sector_norm)
+        df_rel_to_col = _make_relative_to_col(df_unnormed, col_label=sector_norm)
 
     sectors_to_plot = [
         sector
