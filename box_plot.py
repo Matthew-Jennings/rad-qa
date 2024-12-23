@@ -22,7 +22,7 @@ import pandas as pd
 from plotly import graph_objects as go
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 
 # Define constants
 SECTOR_COLOR_MAP: Dict[str, str] = {
@@ -310,7 +310,9 @@ def plot_raw_results(df: pd.DataFrame) -> None:
     )
 
     # Relative to planned
-    df_planned = df[df["ImageType"] == "DRCS PREDICTED"]
+    df_planned = (
+        df.loc[df["ImageType"] == "DRCS PREDICTED"].copy(deep=True).reset_index()
+    )
     if df_planned.empty:
         logging.error("No planned data found with ImageType 'DRCS PREDICTED'.")
         sys.exit(1)
@@ -321,12 +323,13 @@ def plot_raw_results(df: pd.DataFrame) -> None:
         )
         sys.exit(1)
     else:
-        planned_row = df_planned.iloc[0]
+        planned_row = df_planned.loc[0]
+        logging.debug("Planned data found:\n%s", planned_row)
 
     df_rel_to_plan = df_unnormed.copy(deep=True)
     df_rel_to_plan[sector_cols] = (
         df_rel_to_plan[sector_cols]
-        .div(planned_row[sector_cols], axis=0)
+        .div(planned_row[sector_cols], axis=1)
         .subtract(1)
         .astype(float)
     )
