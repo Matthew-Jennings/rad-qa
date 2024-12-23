@@ -406,7 +406,7 @@ def get_roi_stats(
             )
 
     if inspect_mode == "live" and fig is not None:
-        plt.title("DICOM Image with Rotated ROIs")
+        plt.title(image_name)
         plt.axis("off")
         plt.show()
     elif (
@@ -415,14 +415,14 @@ def get_roi_stats(
         and image_name is not None
         and fig is not None
     ):
-        plt.title("DICOM Image with Rotated ROIs")
+        plt.title(image_name)
         plt.axis("off")
         save_path = output_dir / f"{image_name}.png"
         fig.savefig(save_path, bbox_inches="tight")
         plt.close(fig)
         logger.debug("Saved ROI overlay image to %s", save_path)
 
-    return roi_stats, is_acquired  # Modified return statement
+    return roi_stats, is_acquired
 
 
 def get_roi_stats_for_images_in_dir(
@@ -503,8 +503,8 @@ def get_roi_stats_for_images_in_dir(
             continue
 
         roi_config_copy = copy.deepcopy(roi_config)
-        # Adjust ROI angles for rotated images (indicated by "_A" in filename)
-        if "_A" in dicom_fpath.stem:
+        # Adjust ROI angles for rotated images (indicated by "_V" in filename)
+        if "_V_" in dicom_fpath.stem.upper() or dicom_fpath.stem.upper().endswith("_V"):
             logger.debug("Adjusting ROI angles for rotated image: %s", dicom_fpath.name)
             for roi in roi_config_copy["roi_list"]:
                 roi["roi_angle"] = (roi["roi_angle"] - 180) % 360
@@ -548,7 +548,7 @@ def get_roi_stats_for_images_in_dir(
         counts = df[df["ImageType"] == image_type].groupby("AcquisitionDate").size()
         multiple = counts[counts > 1]
         if not multiple.empty:
-            for date, count in multiple.iteritems():
+            for date, count in multiple.items():
                 logger.warning(
                     "More than one '%s' image for AcquisitionDate '%s'. "
                     "Found %d instances.",
@@ -612,7 +612,11 @@ def get_roi_stats_for_images_in_dir(
                         drcs_image[roi_columns] / open_image[roi_columns]
                     )
                     norm_row_dict = drcs_image[non_roi_columns].to_dict()
-                    norm_row_dict["ImageType"] = "NORMALIZED"
+                    # Update ImageType based on the group
+                    if group == "acquired":
+                        norm_row_dict["ImageType"] = "NORMALIZED"
+                    elif group == "predicted":
+                        norm_row_dict["ImageType"] = "NORMALISED PREDICTED"
                     for c in roi_columns:
                         norm_row_dict[c] = float(normalized_values[c])
                     normalized_data.append(norm_row_dict)
@@ -641,7 +645,11 @@ def get_roi_stats_for_images_in_dir(
                         drcs_image[roi_columns] / open_pred_image[roi_columns]
                     )
                     norm_row_dict = drcs_image[non_roi_columns].to_dict()
-                    norm_row_dict["ImageType"] = "NORMALIZED"
+                    # Update ImageType based on the group
+                    if group == "acquired":
+                        norm_row_dict["ImageType"] = "NORMALIZED"
+                    elif group == "predicted":
+                        norm_row_dict["ImageType"] = "NORMALISED PREDICTED"
                     for c in roi_columns:
                         norm_row_dict[c] = float(normalized_values[c])
                     normalized_data.append(norm_row_dict)
