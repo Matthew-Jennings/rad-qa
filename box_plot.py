@@ -15,6 +15,7 @@
 import argparse
 import logging
 import pathlib
+import sys
 from typing import Dict
 
 import pandas as pd
@@ -284,7 +285,7 @@ def load_and_prepare_data(data_path: pathlib.Path) -> pd.DataFrame:
         raise
 
 
-def plot_raw_results(df: pd.DataFrame, df_planned: pd.DataFrame) -> None:
+def plot_raw_results(df: pd.DataFrame) -> None:
     """
     Generate plots of mean CU (Calibration Units) values in sector ROIs,
     as well as their relative differences compared to planned values.
@@ -292,9 +293,7 @@ def plot_raw_results(df: pd.DataFrame, df_planned: pd.DataFrame) -> None:
     Parameters
     ----------
     df : pd.DataFrame
-        Data frame containing the main dataset, including sector ROI CU values.
-    df_planned : pd.DataFrame
-        Data frame containing planned sector CU values for comparison.
+        Data frame containing the main dataset, including sector ROI CU values and planned data.
     """
     sector_cols = list(SECTOR_COLOR_MAP)
     df_unnormed = df.loc[df["ImageType"] == "DRCS"].copy(deep=True)
@@ -310,10 +309,22 @@ def plot_raw_results(df: pd.DataFrame, df_planned: pd.DataFrame) -> None:
     )
 
     # Relative to planned
+    df_planned = df[df["ImageType"] == "DRCS PREDICTED"]
+    if df_planned.empty:
+        logging.error("No planned data found with ImageType 'DRCS PREDICTED'.")
+        sys.exit(1)
+    elif len(df_planned) > 1:
+        logging.error(
+            "Multiple planned data rows found with ImageType 'DRCS PREDICTED'. Please ensure only one exists."
+        )
+        sys.exit(1)
+    else:
+        planned_row = df_planned.iloc[0]
+
     df_rel_to_plan = df_unnormed.copy(deep=True)
     df_rel_to_plan[sector_cols] = (
         df_rel_to_plan[sector_cols]
-        .div(df_planned[sector_cols].iloc[0])
+        .div(planned_row[sector_cols], axis=0)
         .subtract(1)
         .astype(float)
     )
@@ -393,9 +404,9 @@ def plot_relative_to_sector_or_average(
         )
         display_average = False  # Average line not needed when normalized to average
     else:
-        title = f"Mean CU Per Sector Relative to Sector {sector_norm}"
-        y_title = f"Mean CU in ROI relative to mean CU in Sector {sector_norm} ROI"
-        display_average = False if sector_norm != "Average" else True
+        title = "Mean CU Per Sector Relative to Sector {sector_norm}"
+        y_title = "Mean CU in ROI relative to mean CU in Sector {sector_norm} ROI"
+        display_average = True
 
     box_plot_sectors(
         df_rel_to_col[sectors_to_plot],
@@ -412,7 +423,9 @@ def main():
         description="Generate box plots for sector ROI Calibration Units (CU) data."
     )
     parser.add_argument(
-        "data_path", type=pathlib.Path, help="Path to the 'roi_stats.csv' data file."
+        "data_path",
+        type=pathlib.Path,
+        help="Path to the 'roi_stats.csv' data file.",
     )
     parser.add_argument(
         "--sector-norm",
@@ -426,28 +439,11 @@ def main():
     data_path: pathlib.Path = args.data_path
     sector_norm: str = args.sector_norm
 
-    # Load planned data
-    df_planned = pd.DataFrame.from_dict(
-        {
-            "File": ["RI.1.2.246.352.71.3.581896633164.50047.20240930042904"],
-            "RTImageLabel": ["DRCS PLANNED"],
-            "AcquisitionDate": ["20240930"],
-            "A": [0.043024831],
-            "B": [0.043044262],
-            "C": [0.043095744],
-            "D": [0.043080568],
-            "E": [0.043016632],
-            "Average": [0.043052408],
-            "Max vs Min": [0.001839102],
-        }
-    ).astype(DTYPES_BY_COL)
-    logging.info("Planned data initialized.")
-
-    # Load and prepare main data
+    # Load main data
     df = load_and_prepare_data(data_path)
 
     # Generate plots
-    plot_raw_results(df, df_planned)
+    plot_raw_results(df)
     plot_normalized_results(df)
     plot_relative_to_sector_or_average(df, sector_norm=sector_norm)
 
