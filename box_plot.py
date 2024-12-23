@@ -293,7 +293,8 @@ def plot_raw_results(df: pd.DataFrame) -> None:
     Parameters
     ----------
     df : pd.DataFrame
-        Data frame containing the main dataset, including sector ROI CU values and planned data.
+        Data frame containing the main dataset, including sector ROI CU values and
+        planned data.
     """
     sector_cols = list(SECTOR_COLOR_MAP)
     df_unnormed = df.loc[df["ImageType"] == "DRCS"].copy(deep=True)
@@ -315,7 +316,8 @@ def plot_raw_results(df: pd.DataFrame) -> None:
         sys.exit(1)
     elif len(df_planned) > 1:
         logging.error(
-            "Multiple planned data rows found with ImageType 'DRCS PREDICTED'. Please ensure only one exists."
+            "Multiple planned data rows found with ImageType 'DRCS PREDICTED'. "
+            "Please ensure only one exists."
         )
         sys.exit(1)
     else:
