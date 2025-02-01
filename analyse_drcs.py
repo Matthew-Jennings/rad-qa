@@ -52,23 +52,24 @@ Optional arguments:
 
 import argparse
 import copy
+import json
+import logging
 import os
 import pathlib
-import json
-import sys
 import platform
 import subprocess
-import logging
+import sys
+from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import pydicom
-import numpy as np
-import matplotlib.pyplot as plt
-from skimage.draw import polygon
 from pydicom.dataset import FileDataset
+from skimage.draw import polygon
 
-# Configure default logging to INFO. This will be overridden after loading config.
+# Configure default logging to INFO.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(filename)s:%(lineno)d | %(message)s",
@@ -76,29 +77,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Hardcoded ROI labels
 ROI_LABELS: List[str] = ["A", "B", "C", "D", "E"]
 NUM_ROIS: int = len(ROI_LABELS)
 
+# Dataclass for ROI configuration entries.
+@dataclass
+class ROI:
+    roi_center_offset_from_image_centre_mm: float
+    roi_width_mm: float
+    roi_height_mm: float
+    roi_angle: float
+    roi_color: str
+    roi_label: str
 
 def get_rotated_rectangle_vertices(
     cx: float, cy: float, width: float, height: float, angle_deg: float
 ) -> np.ndarray:
-    """Compute the vertices of a rotated rectangle.
-
-    Given the rectangle's center coordinates, dimensions, and rotation angle, this
-    function computes the (x, y) coordinates of the rectangle's four corners.
-
-    Args:
-        cx: X-coordinate of rectangle center.
-        cy: Y-coordinate of rectangle center.
-        width: Rectangle width in pixels.
-        height: Rectangle height in pixels.
-        angle_deg: Rotation angle in degrees, counter-clockwise.
-
-    Returns:
-        np.ndarray: Array of shape (4, 2) containing the vertices of the rectangle.
-    """
+    """Compute the vertices of a rotated rectangle."""
     logger.debug(
         "Calculating rotated rectangle vertices with center=(%.2f, %.2f), "
         "width=%.2f, height=%.2f, angle_deg=%.2f",
@@ -111,7 +106,6 @@ def get_rotated_rectangle_vertices(
     angle_rad = np.deg2rad(-angle_deg)
     w = width / 2
     h = height / 2
-
     corners = np.array([[-w, -h], [w, -h], [w, h], [-w, h]])
     R = np.array(
         [
@@ -123,7 +117,6 @@ def get_rotated_rectangle_vertices(
     vertices = rotated_corners + np.array([cx, cy])
     logger.debug("Computed vertices:\n%s", vertices)
     return vertices
-
 
 def load_roi_config(config_path: pathlib.Path) -> Dict[str, Any]:
     """Load ROI configuration parameters from a JSON file.
@@ -156,7 +149,6 @@ def load_roi_config(config_path: pathlib.Path) -> Dict[str, Any]:
     if not config_path.is_file():
         logger.error("Configuration file not found at %s", config_path)
         raise FileNotFoundError(f"Configuration file not found at {config_path}")
-
     try:
         with open(config_path, "r", encoding="utf-8-sig") as f:
             config = json.load(f)
@@ -172,17 +164,14 @@ def load_roi_config(config_path: pathlib.Path) -> Dict[str, Any]:
         "roi_height_mm",
     }
     required_list_keys = {"roi_angles", "roi_colors"}
-
     missing_shared_keys = required_shared_keys - set(config.keys())
     missing_list_keys = required_list_keys - set(config.keys())
-
     if missing_shared_keys:
         logger.error("Missing required shared keys: %s", missing_shared_keys)
         raise ValueError(f"Missing required shared keys: {missing_shared_keys}")
     if missing_list_keys:
         logger.error("Missing required list keys: %s", missing_list_keys)
         raise ValueError(f"Missing required list keys: {missing_list_keys}")
-
     list_lengths = {key: len(config[key]) for key in required_list_keys}
     if not all(length == NUM_ROIS for length in list_lengths.values()):
         logger.error(
@@ -195,26 +184,20 @@ def load_roi_config(config_path: pathlib.Path) -> Dict[str, Any]:
 
     roi_config_list = []
     for i in range(NUM_ROIS):
-        roi_dict = {
-            "roi_center_offset_from_image_centre_mm": config[
-                "roi_center_offset_from_image_centre_mm"
-            ],
-            "roi_width_mm": config["roi_width_mm"],
-            "roi_height_mm": config["roi_height_mm"],
-            "roi_angle": config["roi_angles"][i],
-            "roi_color": config["roi_colors"][i],
-            "roi_label": ROI_LABELS[i],
-        }
-        roi_config_list.append(roi_dict)
+        roi_obj = ROI(
+            roi_center_offset_from_image_centre_mm=config["roi_center_offset_from_image_centre_mm"],
+            roi_width_mm=config["roi_width_mm"],
+            roi_height_mm=config["roi_height_mm"],
+            roi_angle=config["roi_angles"][i],
+            roi_color=config["roi_colors"][i],
+            roi_label=ROI_LABELS[i],
+        )
+        roi_config_list.append(asdict(roi_obj))
 
-    open_rtimage_labels = config.get("open_rtimage_labels", [])
-    drcs_rtimage_labels = config.get("drcs_rtimage_labels", [])
-    open_rtimage_labels = [label.lower() for label in open_rtimage_labels]
-    drcs_rtimage_labels = [label.lower() for label in drcs_rtimage_labels]
-
-    # Read log_level from config, default to INFO if not specified
+    open_rtimage_labels = [label.lower() for label in config.get("open_rtimage_labels", [])]
+    drcs_rtimage_labels = [label.lower() for label in config.get("drcs_rtimage_labels", [])]
     log_level_str = config.get("log_level", "INFO").upper()
-    valid_log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+    valid_log_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
     if log_level_str not in valid_log_levels:
         logger.warning(
             "Invalid 'log_level' specified in config: '%s'. Defaulting to 'INFO'.",
@@ -226,12 +209,86 @@ def load_roi_config(config_path: pathlib.Path) -> Dict[str, Any]:
         "roi_list": roi_config_list,
         "open_rtimage_labels": open_rtimage_labels,
         "drcs_rtimage_labels": drcs_rtimage_labels,
-        "log_level": log_level_str,  # Added log_level to configuration
+        "log_level": log_level_str,
     }
 
     logger.debug("Final ROI configuration:\n%s", roi_config)
     return roi_config
 
+def compute_roi_polygon(
+    image: np.ndarray,
+    roi: Dict[str, Any],
+    image_center: Tuple[float, float],
+    col_spacing_mm: float,
+    row_spacing_mm: float,
+) -> Tuple[np.ndarray, np.ndarray, float, float]:
+    """Compute the polygon vertices and mask for an ROI."""
+    theta_rad = np.deg2rad(-roi["roi_angle"])
+    rect_center_x = image_center[0] + roi["roi_center_offset_from_image_centre_mm"] * np.cos(theta_rad) / col_spacing_mm
+    rect_center_y = image_center[1] - roi["roi_center_offset_from_image_centre_mm"] * np.sin(theta_rad) / row_spacing_mm
+    roi_width_px = round(roi["roi_width_mm"] / col_spacing_mm)
+    roi_height_px = round(roi["roi_height_mm"] / row_spacing_mm)
+    vertices = get_rotated_rectangle_vertices(rect_center_x, rect_center_y, roi_width_px, roi_height_px, roi["roi_angle"])
+    image_height, image_width = image.shape
+    vertices[:, 0] = np.clip(vertices[:, 0], 0, image_width - 1)
+    vertices[:, 1] = np.clip(vertices[:, 1], 0, image_height - 1)
+    mask = np.zeros_like(image, dtype=bool)
+    rr, cc = polygon(vertices[:, 1], vertices[:, 0], image.shape)
+    mask[rr, cc] = True
+    return vertices, mask, rect_center_x, rect_center_y
+
+def display_or_save_image(
+    image: np.ndarray,
+    overlays: List[Dict[str, Any]],
+    image_name: str,
+    output_dir: Optional[pathlib.Path],
+    inspect_mode: str,
+) -> None:
+    """Display or save the image with ROI overlays."""
+    fig, ax = plt.subplots(figsize=(10, 10))
+    ax.imshow(image, cmap="gray")
+    for overlay in overlays:
+        vertices = overlay["vertices"]
+        rect_center_x = overlay["rect_center_x"]
+        rect_center_y = overlay["rect_center_y"]
+        roi_label = overlay["roi_label"]
+        roi_color = overlay["roi_color"]
+        polygon_patch = plt.Polygon(
+            vertices, closed=True, edgecolor=roi_color, facecolor="none", linewidth=2
+        )
+        ax.add_patch(polygon_patch)
+        ax.text(
+            rect_center_x,
+            rect_center_y,
+            roi_label,
+            color=roi_color,
+            fontsize=10,
+            ha="center",
+            va="center",
+            fontweight="bold",
+        )
+    plt.title(image_name)
+    plt.axis("off")
+    if inspect_mode == "live":
+        plt.show()
+    elif inspect_mode == "save" and output_dir is not None:
+        save_path = output_dir / f"{image_name}.png"
+        fig.savefig(save_path, bbox_inches="tight")
+        plt.close(fig)
+        logger.debug(f"Saved ROI overlay image to {save_path}")
+
+def adjust_roi_angles(roi_config: Dict[str, Any], filename: str) -> Dict[str, Any]:
+    """
+    Adjust ROI angles if the filename indicates a rotated image.
+    Uses the file's stem (without extension) for checking.
+    """
+    new_config = copy.deepcopy(roi_config)
+    stem = pathlib.Path(filename).stem.upper()
+    if "_V_" in stem or stem.endswith("_V"):
+        logger.debug(f"Adjusting ROI angles for rotated image: {filename}")
+        for roi in new_config["roi_list"]:
+            roi["roi_angle"] = (roi["roi_angle"] - 180) % 360
+    return new_config
 
 def get_roi_stats(
     ds: FileDataset,
@@ -268,162 +325,107 @@ def get_roi_stats(
     logger.debug("Extracting ROI stats for image: %s", image_name)
     rescale_slope = getattr(ds, "RescaleSlope", None)
     rescale_intercept = getattr(ds, "RescaleIntercept", None)
-
     if rescale_slope is None or rescale_intercept is None:
         logger.error("Missing 'RescaleSlope' or 'RescaleIntercept' in DICOM.")
-        raise AttributeError(
-            "DICOM file missing 'RescaleSlope' or 'RescaleIntercept' attributes."
-        )
-
+        raise AttributeError("DICOM file missing 'RescaleSlope' or 'RescaleIntercept' attributes.")
     image = ds.pixel_array * rescale_slope + rescale_intercept
     image *= 100  # Gy to cGy
     logger.debug("Image scaled to cGy units.")
-
     image_type_attr = getattr(ds, "ImageType", None)
     if image_type_attr is None:
         logger.error("Missing 'ImageType' attribute in DICOM.")
         raise AttributeError("DICOM file missing 'ImageType' attribute.")
-
-    # Determine if the image is acquired or predicted
     try:
         is_acquired = image_type_attr[3] == "ACQUIRED_DOSE"
     except IndexError:
         is_acquired = image_type_attr[0] == "ORIGINAL"
-
     if is_acquired:
         exposure_sequence = getattr(ds, "ExposureSequence", None)
         if exposure_sequence is None or len(exposure_sequence) == 0:
             logger.error("Missing 'ExposureSequence' in ACQUIRED_DOSE image.")
-            raise AttributeError(
-                "DICOM file missing 'ExposureSequence' or it is empty."
-            )
-
+            raise AttributeError("DICOM file missing 'ExposureSequence' or it is empty.")
         meterset_exposure = getattr(exposure_sequence[0], "MetersetExposure", None)
         if meterset_exposure is None:
             logger.error("Missing 'MetersetExposure' in ACQUIRED_DOSE image.")
-            raise AttributeError(
-                "DICOM file missing 'MetersetExposure' in 'ExposureSequence'."
-            )
-
-        image /= meterset_exposure  # cGy/MU
+            raise AttributeError("DICOM file missing 'MetersetExposure' in 'ExposureSequence'.")
+        image /= meterset_exposure
         logger.debug("Normalized acquired dose image by MetersetExposure.")
     else:
-        logger.debug(
-            "Image is predicted; no normalization by MetersetExposure applied."
-        )
+        logger.debug("Image is predicted; no normalization by MetersetExposure applied.")
 
     image_height, image_width = image.shape
-    image_center_x, image_center_y = image_width / 2, image_height / 2
-
-    row_spacing_mm = (
-        float(ds.ImagePlanePixelSpacing[0])
-        if hasattr(ds, "ImagePlanePixelSpacing")
-        else None
-    )
-    col_spacing_mm = (
-        float(ds.ImagePlanePixelSpacing[1])
-        if hasattr(ds, "ImagePlanePixelSpacing")
-        else None
-    )
-
-    if row_spacing_mm is None or col_spacing_mm is None:
+    image_center = (image_width / 2, image_height / 2)
+    if hasattr(ds, "ImagePlanePixelSpacing"):
+        row_spacing_mm = float(ds.ImagePlanePixelSpacing[0])
+        col_spacing_mm = float(ds.ImagePlanePixelSpacing[1])
+    else:
         logger.error("Missing 'ImagePlanePixelSpacing' in DICOM.")
         raise AttributeError("DICOM file missing 'ImagePlanePixelSpacing' attribute.")
-
     logger.debug(
         "Image dimensions (px): %dx%d, center=(%.2f, %.2f), "
         "pixel spacing=(%.2fmm, %.2fmm)",
         image_width,
         image_height,
-        image_center_x,
-        image_center_y,
+        image_center[0],
+        image_center[1],
         col_spacing_mm,
         row_spacing_mm,
     )
 
-    fig = None
-    ax = None
-    if inspect_mode in ["live", "save"]:
-        fig, ax = plt.subplots(figsize=(10, 10))
-        ax.imshow(image, cmap="gray")
-
+    overlays = []
     roi_stats: Dict[str, float] = {}
-
     for roi in roi_config["roi_list"]:
-        logger.debug("Processing ROI: %s", roi["roi_label"])
-        theta_rad = np.deg2rad(-roi["roi_angle"])
-
-        rect_center_x = (
-            image_center_x
-            + roi["roi_center_offset_from_image_centre_mm"]
-            * np.cos(theta_rad)
-            / col_spacing_mm
+        vertices, mask, rect_center_x, rect_center_y = compute_roi_polygon(
+            image, roi, image_center, col_spacing_mm, row_spacing_mm
         )
-        rect_center_y = (
-            image_center_y
-            - roi["roi_center_offset_from_image_centre_mm"]
-            * np.sin(theta_rad)
-            / row_spacing_mm
-        )
-
-        roi_width_px = round(roi["roi_width_mm"] / col_spacing_mm)
-        roi_height_px = round(roi["roi_height_mm"] / row_spacing_mm)
-
-        vertices = get_rotated_rectangle_vertices(
-            rect_center_x, rect_center_y, roi_width_px, roi_height_px, roi["roi_angle"]
-        )
-
-        vertices[:, 0] = np.clip(vertices[:, 0], 0, image_width - 1)
-        vertices[:, 1] = np.clip(vertices[:, 1], 0, image_height - 1)
-
-        mask = np.zeros_like(image, dtype=bool)
-        rr, cc = polygon(vertices[:, 1], vertices[:, 0], image.shape)
-        mask[rr, cc] = True
-
         roi_pixels = image[mask]
         roi_mean = float(np.mean(roi_pixels))
         roi_stats[roi["roi_label"]] = roi_mean
-        logger.debug("ROI %s mean pixel value: %.4f cGy/MU", roi["roi_label"], roi_mean)
+        logger.debug(f"ROI {roi['roi_label']} mean pixel value: {roi_mean:.4f} cGy/MU")
+        overlays.append({
+            "vertices": vertices,
+            "rect_center_x": rect_center_x,
+            "rect_center_y": rect_center_y,
+            "roi_label": roi["roi_label"],
+            "roi_color": roi["roi_color"],
+        })
 
-        if inspect_mode in ["live", "save"] and fig is not None and ax is not None:
-            polygon_patch = plt.Polygon(
-                vertices,
-                closed=True,
-                edgecolor=roi["roi_color"],
-                facecolor="none",
-                linewidth=2,
-            )
-            ax.add_patch(polygon_patch)
-            ax.text(
-                rect_center_x,
-                rect_center_y,
-                roi["roi_label"],
-                color=roi["roi_color"],
-                fontsize=10,
-                ha="center",
-                va="center",
-                fontweight="bold",
-            )
-
-    if inspect_mode == "live" and fig is not None:
-        plt.title(image_name)
-        plt.axis("off")
-        plt.show()
-    elif (
-        inspect_mode == "save"
-        and output_dir is not None
-        and image_name is not None
-        and fig is not None
-    ):
-        plt.title(image_name)
-        plt.axis("off")
-        save_path = output_dir / f"{image_name}.png"
-        fig.savefig(save_path, bbox_inches="tight")
-        plt.close(fig)
-        logger.debug("Saved ROI overlay image to %s", save_path)
+    if inspect_mode in ["live", "save"]:
+        display_or_save_image(image, overlays, image_name if image_name else "Image", output_dir, inspect_mode)
 
     return roi_stats, is_acquired
 
+def normalize_images(
+    group_df: pd.DataFrame,
+    acq_date: str,
+    group: str,
+    open_label: str,
+    drcs_label: str,
+    non_roi_columns: List[str],
+    roi_columns: List[str],
+) -> List[Dict[str, Any]]:
+    """
+    Normalize DRCS ROI statistics using a corresponding OPEN image.
+    """
+    normalized_data = []
+    open_images = group_df[group_df["ImageType"] == open_label]
+    if open_images.empty:
+        logger.warning(
+            f"Missing '{open_label}' image for AcquisitionDate '{acq_date}'. Skipping normalization for this group."
+        )
+        return normalized_data
+    if len(open_images) > 1:
+        logger.warning("More than one '%s' image for AcquisitionDate '%s'. Using the first one for normalization.", open_label, acq_date)
+    open_image = open_images.iloc[0]
+    drcs_images = group_df[group_df["ImageType"] == drcs_label]
+    for _, drcs_image in drcs_images.iterrows():
+        normalized_values = drcs_image[roi_columns] / open_image[roi_columns]
+        norm_row = drcs_image[non_roi_columns].to_dict()
+        norm_row["ImageType"] = "NORMALIZED" if group == "acquired" else "NORMALISED PREDICTED"
+        for c in roi_columns:
+            norm_row[c] = float(normalized_values[c])
+        normalized_data.append(norm_row)
+    return normalized_data
 
 def get_roi_stats_for_images_in_dir(
     dirpath: pathlib.Path,
@@ -477,7 +479,6 @@ def get_roi_stats_for_images_in_dir(
         ds = pydicom.dcmread(dicom_fpath)
         rt_image_label = getattr(ds, "RTImageLabel", "").lower()
         acquisition_date = getattr(ds, "AcquisitionDate", None)
-
         if acquisition_date is None and normalize:
             logger.warning(
                 "Missing 'AcquisitionDate' in file '%s'. "
@@ -502,32 +503,26 @@ def get_roi_stats_for_images_in_dir(
         if image_type == "UNKNOWN":
             continue
 
-        roi_config_copy = copy.deepcopy(roi_config)
-        # Adjust ROI angles for rotated images (indicated by "_V" in filename)
-        if "_V_" in dicom_fpath.stem.upper() or dicom_fpath.stem.upper().endswith("_V"):
-            logger.debug("Adjusting ROI angles for rotated image: %s", dicom_fpath.name)
-            for roi in roi_config_copy["roi_list"]:
-                roi["roi_angle"] = (roi["roi_angle"] - 180) % 360
-
+        # Pass the full file name (with extension) so that adjust_roi_angles() correctly detects a '_V'
+        roi_config_adjusted = adjust_roi_angles(roi_config, dicom_fpath.name)
         try:
             roi_stats, is_acquired = get_roi_stats(
                 ds,
-                roi_config_copy,
+                roi_config_adjusted,
                 inspect_mode=inspect_mode,
                 output_dir=output_image_dir,
                 image_name=dicom_fpath.stem,
             )
-            # Modify ImageType based on is_acquired flag
             if image_type == "DRCS":
                 image_type_final = "DRCS" if is_acquired else "DRCS PREDICTED"
             elif image_type == "OPEN":
                 image_type_final = "OPEN" if is_acquired else "OPEN PREDICTED"
             else:
-                image_type_final = image_type  # Shouldn't reach here
+                image_type_final = image_type
 
             roi_stats["File"] = dicom_fpath.stem
             roi_stats["RTImageLabel"] = rt_image_label
-            roi_stats["ImageType"] = image_type_final  # Updated ImageType
+            roi_stats["ImageType"] = image_type_final
             roi_stats["AcquisitionDate"] = acquisition_date
             roi_stats_all.append(roi_stats)
         except AttributeError as e:
@@ -542,22 +537,6 @@ def get_roi_stats_for_images_in_dir(
     for col in ROI_LABELS:
         df[col] = pd.to_numeric(df[col])
 
-    # Warn if there is more than one "OPEN PREDICTED" or "DRCS PREDICTED" per
-    # AcquisitionDate
-    for image_type in ["OPEN PREDICTED", "DRCS PREDICTED"]:
-        counts = df[df["ImageType"] == image_type].groupby("AcquisitionDate").size()
-        multiple = counts[counts > 1]
-        if not multiple.empty:
-            for date, count in multiple.items():
-                logger.warning(
-                    "More than one '%s' image for AcquisitionDate '%s'. "
-                    "Found %d instances.",
-                    image_type,
-                    date,
-                    count,
-                )
-
-    # Add a 'Group' column to differentiate between acquired and predicted images
     def determine_group(image_type: str) -> Optional[str]:
         if image_type in ["DRCS", "OPEN"]:
             return "acquired"
@@ -568,109 +547,29 @@ def get_roi_stats_for_images_in_dir(
 
     df["Group"] = df["ImageType"].apply(determine_group)
 
+    # Always define roi_columns (and non_roi_columns) before optional normalization.
+    non_roi_columns = ["File", "RTImageLabel", "ImageType", "AcquisitionDate", "Group"]
+    roi_columns = [c for c in df.columns if c not in non_roi_columns and pd.api.types.is_numeric_dtype(df[c])]
+
     if normalize:
         logger.debug("Normalizing ROI stats by corresponding normalization fields.")
-        non_roi_columns = [
-            "File",
-            "RTImageLabel",
-            "ImageType",
-            "AcquisitionDate",
-            "Group",
-        ]
-        roi_columns = [
-            c
-            for c in df.columns
-            if c not in non_roi_columns and pd.api.types.is_numeric_dtype(df[c])
-        ]
         normalized_data: List[Dict[str, Any]] = []
-
-        # Group by AcquisitionDate and Group (acquired/predicted)
         grouped = df.groupby(["AcquisitionDate", "Group"])
-
         for (acq_date, group), group_df in grouped:
             if group == "acquired":
-                open_images = group_df[group_df["ImageType"] == "OPEN"]
-                if len(open_images) == 0:
-                    logger.warning(
-                        "Missing 'OPEN' image for AcquisitionDate '%s'. "
-                        "Skipping normalization for this group.",
-                        acq_date,
-                    )
-                    continue
-                elif len(open_images) > 1:
-                    logger.warning(
-                        "Multiple 'OPEN' images for AcquisitionDate '%s'. "
-                        "Using the first one for normalization.",
-                        acq_date,
-                    )
-                open_image = open_images.iloc[0]
-
-                drcs_images = group_df[group_df["ImageType"] == "DRCS"]
-
-                for _, drcs_image in drcs_images.iterrows():
-                    normalized_values = (
-                        drcs_image[roi_columns] / open_image[roi_columns]
-                    )
-                    norm_row_dict = drcs_image[non_roi_columns].to_dict()
-                    # Update ImageType based on the group
-                    if group == "acquired":
-                        norm_row_dict["ImageType"] = "NORMALIZED"
-                    elif group == "predicted":
-                        norm_row_dict["ImageType"] = "NORMALISED PREDICTED"
-                    for c in roi_columns:
-                        norm_row_dict[c] = float(normalized_values[c])
-                    normalized_data.append(norm_row_dict)
-
+                normalized_data.extend(
+                    normalize_images(group_df, acq_date, group, "OPEN", "DRCS", non_roi_columns, roi_columns)
+                )
             elif group == "predicted":
-                open_pred_images = group_df[group_df["ImageType"] == "OPEN PREDICTED"]
-                if len(open_pred_images) == 0:
-                    logger.warning(
-                        "Missing 'OPEN PREDICTED' image for AcquisitionDate '%s'. "
-                        "Skipping normalization for this group.",
-                        acq_date,
-                    )
-                    continue
-                elif len(open_pred_images) > 1:
-                    logger.warning(
-                        "Multiple 'OPEN PREDICTED' images for AcquisitionDate '%s'. "
-                        "Using the first one for normalization.",
-                        acq_date,
-                    )
-                open_pred_image = open_pred_images.iloc[0]
-
-                drcs_pred_images = group_df[group_df["ImageType"] == "DRCS PREDICTED"]
-
-                for _, drcs_image in drcs_pred_images.iterrows():
-                    normalized_values = (
-                        drcs_image[roi_columns] / open_pred_image[roi_columns]
-                    )
-                    norm_row_dict = drcs_image[non_roi_columns].to_dict()
-                    # Update ImageType based on the group
-                    if group == "acquired":
-                        norm_row_dict["ImageType"] = "NORMALIZED"
-                    elif group == "predicted":
-                        norm_row_dict["ImageType"] = "NORMALISED PREDICTED"
-                    for c in roi_columns:
-                        norm_row_dict[c] = float(normalized_values[c])
-                    normalized_data.append(norm_row_dict)
-
+                normalized_data.extend(
+                    normalize_images(group_df, acq_date, group, "OPEN PREDICTED", "DRCS PREDICTED", non_roi_columns, roi_columns)
+                )
         if normalized_data:
             df_normalized = pd.DataFrame(normalized_data)
             df = pd.concat([df, df_normalized], ignore_index=True)
             logger.debug("Added normalized data to the DataFrame.")
         else:
-            logger.debug(
-                "No normalized data was generated (no DRCS-OPEN or "
-                "DRCS PREDICTED-OPEN PREDICTED pairs matched)."
-            )
-
-    # Calculate 'Average' and 'Max vs Min' columns
-    non_roi_columns = ["File", "RTImageLabel", "ImageType", "AcquisitionDate", "Group"]
-    roi_columns = [
-        c
-        for c in df.columns
-        if c not in non_roi_columns and pd.api.types.is_numeric_dtype(df[c])
-    ]
+            logger.debug("No normalized data was generated (no matching pairs).")
 
     if roi_columns:
         df["Average"] = df[roi_columns].mean(axis=1)
@@ -680,23 +579,17 @@ def get_roi_stats_for_images_in_dir(
     else:
         logger.warning("No ROI columns found in the DataFrame; skipping calculations.")
 
-    desired_order = (
-        ["File", "RTImageLabel", "ImageType", "AcquisitionDate"]
-        + roi_columns
-        + ["Average", "Max vs Min"]
-    )
+    desired_order = (["File", "RTImageLabel", "ImageType", "AcquisitionDate"] + roi_columns + ["Average", "Max vs Min"])
     ordered_columns = [c for c in desired_order if c in df.columns]
     other_columns = [c for c in df.columns if c not in ordered_columns]
     df = df[ordered_columns + other_columns]
 
-    # Drop the 'Group' column before saving to exclude it from output files
     if "Group" in df.columns:
         df = df.drop(columns=["Group"])
         logger.debug("Dropped 'Group' column from the DataFrame for output.")
 
     logger.debug("Final DataFrame:\n%s", df.head())
     return df
-
 
 def open_file(filepath: pathlib.Path) -> None:
     """Open a file using the default application based on the operating system.
@@ -715,23 +608,8 @@ def open_file(filepath: pathlib.Path) -> None:
     else:  # Linux and other Unix systems
         subprocess.run(["xdg-open", str(filepath)], check=True)
 
-
 def main() -> None:
-    """Main function to execute the DR-CS analysis workflow.
-
-    Steps performed:
-    1. Parse command-line arguments.
-    2. Load ROI configuration from a specified or default config file.
-    3. Configure logging based on the 'log_level' from config.
-    4. Process all DICOM images in the input directory to calculate ROI statistics.
-    5. Optionally normalize the DR-CS statistics by corresponding OPEN fields.
-    6. Save results to CSV and Excel files.
-    7. Optionally open the CSV or Excel results file.
-
-    Raises:
-        SystemExit: If the configuration cannot be loaded or if image processing
-            encounters critical issues that prevent completion.
-    """
+    """Main function to execute the DR-CS analysis workflow."""
     parser = argparse.ArgumentParser(description="Process DICOM images in a directory.")
     parser.add_argument(
         "input_directory",
@@ -742,8 +620,7 @@ def main() -> None:
         "--config",
         type=str,
         default=None,
-        help="Path to the configuration JSON file. If not provided, defaults to "
-        "'config.json' in the input directory.",
+        help="Path to the configuration JSON file. If not provided, defaults to 'config.json' in the input directory.",
     )
     parser.add_argument(
         "--inspect-live",
@@ -794,14 +671,12 @@ def main() -> None:
         logger.error("Error loading ROI configuration: %s", e)
         sys.exit(1)
 
-    # Configure logging level based on config after loading
     log_level_str = roi_config.get("log_level", "INFO").upper()
     numeric_level = getattr(logging, log_level_str, None)
     if not isinstance(numeric_level, int):
         logger.warning("Invalid 'log_level' '%s'. Defaulting to 'INFO'.", log_level_str)
         numeric_level = logging.INFO
 
-    # Update logger level
     logger.setLevel(numeric_level)
     for handler in logger.handlers:
         handler.setLevel(numeric_level)
@@ -815,13 +690,8 @@ def main() -> None:
             normalize=args.normalize,
         )
     except (FileNotFoundError, ValueError) as e:
-        logger.error("Error processing images: %s", e)
+        logger.exception("Error processing images: %s")
         sys.exit(1)
-
-    # Drop the 'Group' column if it exists to exclude it from output files
-    if "Group" in df.columns:
-        df = df.drop(columns=["Group"])
-        logger.debug("Dropped 'Group' column from the DataFrame for output.")
 
     csv_savepath = data_dirpath / "roi_stats.csv"
     excel_savepath = data_dirpath / "roi_stats.xlsx"
@@ -831,7 +701,6 @@ def main() -> None:
 
     with pd.ExcelWriter(excel_savepath, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name="Results")
-
         workbook = writer.book
         worksheet = writer.sheets["Results"]
 
@@ -839,23 +708,18 @@ def main() -> None:
         dp4_format = workbook.add_format({"num_format": "0.0000"})
         dp5_format = workbook.add_format({"num_format": "0.00000"})
 
-        # Set 4 dp float format for ROI columns
-        for roi_label in ["A", "B", "C", "D", "E"]:
+        for roi_label in ROI_LABELS:
             if roi_label in df.columns:
                 col_index = df.columns.get_loc(roi_label)
                 worksheet.set_column(col_index, col_index, None, dp4_format)
 
-        # Set 5 dp float format for "Average"
         if "Average" in df.columns:
             avg_col = df.columns.get_loc("Average")
             worksheet.set_column(avg_col, avg_col, None, dp5_format)
 
-        # Set 2 dp percentage format for "Max vs Min"
         if "Max vs Min" in df.columns:
             max_vs_min_col = df.columns.get_loc("Max vs Min")
-            worksheet.set_column(
-                max_vs_min_col, max_vs_min_col, None, percentage_format
-            )
+            worksheet.set_column(max_vs_min_col, max_vs_min_col, None, percentage_format)
 
     logger.info("Saved ROI statistics to Excel: %s", excel_savepath)
     logger.debug("Saved CSV and Excel results.")
