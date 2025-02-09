@@ -150,8 +150,8 @@ The script requires a `config.json` file in the input directory to define ROI co
 
 The script generates the following output files in the input directory:
 
-- `roi_stats.csv`: A CSV file containing the ROI statistics.
-- `roi_stats.xlsx`: An Excel file containing the ROI statistics.
+- `roi_stats_{timestamp}.csv`: A CSV file containing the ROI statistics.
+- `roi_stats_{timestamp}.xlsx`: An Excel file containing the ROI statistics.
 
 ### Columns in Output Files:
 
