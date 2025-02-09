@@ -308,6 +308,25 @@ def plot_raw_results(df: pd.DataFrame) -> None:
         minor_ytick_step=0.0001,
         display_average=True,
     )
+    df_rel_to_global_mean = df_unnormed.copy(deep=True)
+
+    df_rel_to_global_mean[sector_cols] = (
+        df_unnormed[sector_cols]
+        .div(df_unnormed[sector_cols].mean().mean())
+        .subtract(1)
+        .astype(float)
+    )
+
+    # Relative to global mean
+    box_plot_sectors(
+        df_rel_to_global_mean,
+        fig_title=None,
+        y_title="Mean CU in ROI relative to mean of all sectors across all acquired images",
+        major_ytick_step=0.005,
+        minor_ytick_step=0.001,
+        format_y_as_percentage=True,
+        display_average=False,
+    )
 
     # Relative to planned
     df_planned = (
@@ -335,8 +354,8 @@ def plot_raw_results(df: pd.DataFrame) -> None:
     )
     box_plot_sectors(
         df_rel_to_plan,
-        fig_title="Mean CU Per Sector Relative to Planned Values",
-        y_title="Mean CU in ROI relative to mean planned value in ROI",
+        fig_title=None,
+        y_title="Mean CU in sector ROI relative to corresponding mean PDIP value",
         format_y_as_percentage=True,
         display_average=True,
     )
@@ -404,10 +423,9 @@ def plot_relative_to_sector_or_average(
     ]
 
     if sector_norm == "Average":
-        title = "Mean CU Per Sector Relative to Average of Sector Means"
+        title = None
         y_title = (
-            "Mean CU in ROI relative to average of mean CU values across all "
-            "sector ROIs"
+            "Mean CU in ROI relative to average of across all " "sectors in same image"
         )
         display_average = False  # Average line not needed when normalized to average
     else:
