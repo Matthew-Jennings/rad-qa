@@ -7,4 +7,3 @@ pydicom
 pytest
 scikit-image
 XlsxWriter
-

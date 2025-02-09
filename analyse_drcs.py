@@ -52,6 +52,7 @@ Optional arguments:
 
 import argparse
 import copy
+import datetime
 import json
 import logging
 import os
@@ -693,8 +694,10 @@ def main() -> None:
         logger.exception("Error processing images: %s")
         sys.exit(1)
 
-    csv_savepath = data_dirpath / "roi_stats.csv"
-    excel_savepath = data_dirpath / "roi_stats.xlsx"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+    csv_savepath = data_dirpath / f"roi_stats_{timestamp}.csv"
+    excel_savepath = data_dirpath / f"roi_stats_{timestamp}.xlsx"
 
     df.to_csv(csv_savepath, index=False)
     logger.info("Saved ROI statistics to CSV: %s", csv_savepath)
