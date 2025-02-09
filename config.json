@@ -4,7 +4,7 @@
     "roi_height_mm": 10,
     "roi_angles": [30, 330, 270, 210, 150],
     "roi_colors": ["blue", "red", "yellow", "purple", "green"],
-    "open_rtimage_labels": ["mv_0_1a", "open"],
-    "drcs_rtimage_labels": ["mv_182_1a", "rad_qa_hdmlc", "ra2", "mv_180", "mv_-89", "mv_90", "mv_-177", "mv_179"],
+    "open_rtimage_labels": ["mv_0_0a", "mv_0_1a", "open"],
+    "drcs_rtimage_labels": ["mv_182_1a", "rad_qa_hdmlc", "ra2", "mv_180", "mv_-89", "mv_90", "mv_-177", "mv_179", "mv_179_0a", "mv_179_1a"],
     "log_level": "DEBUG"
 }
