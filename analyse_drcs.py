@@ -694,7 +694,7 @@ def main() -> None:
         logger.exception("Error processing images: %s")
         sys.exit(1)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
     csv_savepath = data_dirpath / f"roi_stats_{timestamp}.csv"
     excel_savepath = data_dirpath / f"roi_stats_{timestamp}.xlsx"
