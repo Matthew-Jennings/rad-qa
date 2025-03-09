@@ -12,6 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+box_plot.py
+
+This module provides functionality for reading data from a CSV file that contains
+ROI (Region Of Interest) statistics for DRCS (Dynamic Range Calibration System) images,
+then generates various box and scatter plots using Plotly to visualize calibration unit (CU)
+values across multiple sectors. It can also compute relative differences (e.g., normalized to
+a particular sector or to a global mean) and plot those differences.
+
+Usage:
+    python box_plot.py /path/to/roi_stats.csv [--sector-norm A|B|C|D|E|Average]
+
+Overview of main components:
+    - SECTOR_COLOR_MAP: Dict specifying which color to use for plotting each sector.
+    - DTYPES_BY_COL: Dict specifying the data types for each CSV column.
+    - load_and_prepare_data: Loads and type-casts the CSV into a pandas DataFrame.
+    - box_plot_sectors: Generates a box plot (and optional scatter plot) for sector data.
+    - plot_raw_results, plot_normalized_results, plot_relative_to_sector_or_average:
+      Higher-level routines that leverage `box_plot_sectors` to produce specific plots.
+    - main: Entry point for command-line usage.
+
+Author: Matthew Jennings
+"""
+
 import argparse
 import logging
 import pathlib
@@ -24,7 +48,7 @@ from plotly import graph_objects as go
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 
-# Define constants
+#: Dict[str, str]: A mapping from sector labels (e.g. 'A', 'B') to their corresponding plot color.
 SECTOR_COLOR_MAP: Dict[str, str] = {
     "A": "blue",
     "B": "red",
@@ -33,7 +57,7 @@ SECTOR_COLOR_MAP: Dict[str, str] = {
     "E": "green",
 }
 
-# Define data types for loading CSV
+#: Dict[str, type]: A mapping of CSV column names to their intended Python data types.
 DTYPES_BY_COL: Dict[str, type] = {
     "File": str,
     "RTImageLabel": str,
@@ -58,7 +82,35 @@ def _create_figure_layout(
     minor_ytick_step: float,
     format_y_as_percentage: bool,
 ) -> dict:
-    """Create layout configuration for the Plotly figure."""
+    """
+    Create layout configuration for the Plotly figure.
+
+    Parameters
+    ----------
+    fig_title : str
+        Title of the figure.
+    x_title : str
+        Label for the x-axis.
+    y_title : str
+        Label for the y-axis.
+    sector_positions : dict
+        A mapping from sector label to a numeric position on the x-axis.
+    min_x : float
+        Minimum x-axis value to display.
+    max_x : float
+        Maximum x-axis value to display.
+    major_ytick_step : float
+        Step size for major y-axis ticks.
+    minor_ytick_step : float
+        Step size for minor y-axis ticks.
+    format_y_as_percentage : bool
+        Whether to format the y-axis ticks as percentages.
+
+    Returns
+    -------
+    dict
+        A dictionary of layout configurations suitable for Plotly's `Figure.update_layout()`.
+    """
     ytickformat = ".1%" if format_y_as_percentage else None
     return dict(
         title=dict(
@@ -114,7 +166,23 @@ def _create_figure_layout(
 def _add_sectors_to_figure(
     fig: go.Figure, df: pd.DataFrame, sector_positions: Dict[str, float]
 ) -> None:
-    """Add box and scatter traces for each sector to the Plotly figure."""
+    """
+    Add box and scatter traces for each sector to the Plotly figure.
+
+    Parameters
+    ----------
+    fig : go.Figure
+        The Plotly Figure object to update.
+    df : pd.DataFrame
+        DataFrame containing sector columns with numeric values.
+    sector_positions : dict
+        Mapping of sector labels to numeric positions on the x-axis.
+
+    Returns
+    -------
+    None
+        The function modifies the Figure object in place.
+    """
     box_width = 0.4
     spacing = 0.05
     delta = (box_width / 2) + spacing
@@ -251,7 +319,24 @@ def box_plot_sectors(
 
 
 def _make_relative_to_col(df: pd.DataFrame, col_label: str = "A") -> pd.DataFrame:
-    """Adjust DataFrame values relative to a specified column."""
+    """
+    Adjust DataFrame values so that each row's sector columns are relative to a specified column.
+
+    Specifically, the sector columns in each row are divided by the value in `col_label`
+    (for that row), then 1 is subtracted to get the relative difference.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame to adjust.
+    col_label : str, default="A"
+        Name of the sector column to use as the reference.
+
+    Returns
+    -------
+    pd.DataFrame
+        A new DataFrame with the sector columns adjusted.
+    """
     cols_to_adjust = [s for s in SECTOR_COLOR_MAP if s in df.columns]
     df_rel_to_col = df.copy(deep=True)
     df_rel_to_col[cols_to_adjust] = (
@@ -425,12 +510,12 @@ def plot_relative_to_sector_or_average(
     if sector_norm == "Average":
         title = None
         y_title = (
-            "Mean CU in ROI relative to average of across all " "sectors in same image"
+            "Mean CU in ROI relative to average of across all sectors in same image"
         )
         display_average = False  # Average line not needed when normalized to average
     else:
-        title = "Mean CU Per Sector Relative to Sector {sector_norm}"
-        y_title = "Mean CU in ROI relative to mean CU in Sector {sector_norm} ROI"
+        title = f"Mean CU Per Sector Relative to Sector {sector_norm}"
+        y_title = f"Mean CU in ROI relative to mean CU in Sector {sector_norm} ROI"
         display_average = True
 
     box_plot_sectors(
@@ -443,7 +528,24 @@ def plot_relative_to_sector_or_average(
 
 
 def main():
-    """Main entry point of the script with CLI implementation."""
+    """
+    Main entry point of the script with CLI implementation.
+
+    The script expects a path to a CSV file containing ROI statistics. It generates a set of
+    box plots (and some scatter overlay) that can be used to analyze calibration unit values
+    across multiple sectors, along with optional normalization options.
+
+    Command-line Arguments
+    ----------------------
+    data_path : pathlib.Path
+        Path to the 'roi_stats.csv' data file.
+    --sector-norm : str
+        Sector to normalize against or 'Average' for mean normalization (default is 'Average').
+
+    Example
+    -------
+    python box_plot.py /path/to/roi_stats.csv --sector-norm A
+    """
     parser = argparse.ArgumentParser(
         description="Generate box plots for sector ROI Calibration Units (CU) data."
     )
